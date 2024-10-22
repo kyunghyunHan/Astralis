@@ -7,7 +7,8 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-use stocki::types::{ChartType, MAPeriod, MeasurementWindow, StockData, TimeFrame};
+
+use stocki::{types::{ChartType, MAPeriod, MeasurementWindow, StockData, TimeFrame},utils::colors};
 
 fn main() -> eframe::Result {
     // let args = Args::parse();
@@ -408,6 +409,38 @@ impl eframe::App for Stocki {
                                         .color(egui::Color32::from_rgb(0, 150, 255))
                                         .width(2.0),
                                     );
+                                    // 추세선 추가
+                                    // let n = measurements.values.len() as f64;
+                                    // let points: Vec<(f64, f64)> = measurements
+                                    //     .values
+                                    //     .iter()
+                                    //     .map(|(i, candle)| (*i as f64, candle.close))
+                                    //     .collect();
+
+                                    // let sum_x: f64 = points.iter().map(|(x, _)| x).sum();
+                                    // let sum_y: f64 = points.iter().map(|(_, y)| y).sum();
+                                    // let sum_xy: f64 = points.iter().map(|(x, y)| x * y).sum();
+                                    // let sum_xx: f64 = points.iter().map(|(x, _)| x * x).sum();
+
+                                    // let m =
+                                    //     (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
+                                    // let b = (sum_y - m * sum_x) / n;
+
+                                    // let first_x =
+                                    //     *measurements.values.first_key_value().unwrap().0 as f64;
+                                    // let last_x =
+                                    //     *measurements.values.last_key_value().unwrap().0 as f64;
+
+                                    // let trend_points =
+                                    //     vec![[first_x, m * first_x + b], [last_x, m * last_x + b]];
+
+                                    // plot_ui.line(
+                                    //     egui_plot::Line::new(egui_plot::PlotPoints::new(
+                                    //         trend_points,
+                                    //     ))
+                                    //     .color(egui::Color32::from_rgb(255, 100, 100))
+                                    //     .width(2.0),
+                                    // );
                                 }
                                 // Inside the match self.chart_type block, replace the Candle case with:
                                 ChartType::Candle => {
@@ -430,13 +463,7 @@ impl eframe::App for Stocki {
                                                 upper_whisker, // 최고가
                                             );
 
-                                            let color = if candle.close >= candle.open {
-                                                egui::Color32::from_rgb(235, 52, 52)
-                                            // 상승봉 빨간색
-                                            } else {
-                                                egui::Color32::from_rgb(71, 135, 231)
-                                                // 하락봉 파란색
-                                            };
+                                            let color = colors(candle.open,candle.close);
 
                                             BoxElem::new(*i as f64, spread)
                                                 .fill(color)
@@ -501,7 +528,7 @@ impl eframe::App for Stocki {
                         .0 as f64; // 이미 정규화된 값 사용
 
                     let plot = egui_plot::Plot::new("volume_chart")
-                        .height(200.0)
+                        .height(100.0)
                         .width(800.)
                         .view_aspect(5.0)
                         .auto_bounds(Vec2b::new(false, false))
@@ -531,7 +558,7 @@ impl eframe::App for Stocki {
                                         0.8
                                     };
 
-                                    Bar::new(*i as f64, candle.volume/10.) // 이미 정규화된 타임스탬프 사용
+                                    Bar::new(*i as f64, candle.volume / 10.) // 이미 정규화된 타임스탬프 사용
                                         .width(bar_width)
                                         .fill(color)
                                         .stroke(egui::Stroke::new(1.0, color))
