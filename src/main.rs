@@ -13,8 +13,13 @@ use std::{
 };
 //lib
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use stocki::{plot::plot, types::StockType, utils::get_data};
+use stocki::{
+    plot::plot,
+    types::{MeasurementWindow, StockType},
+    utils::{get_data, get_data2},
+};
 
 fn main() -> eframe::Result {
     // let args = Args::parse();
@@ -38,47 +43,6 @@ fn main() -> eframe::Result {
     )
 }
 pub type Measurement = egui_plot::PlotPoint;
-impl MeasurementWindow {
-    pub fn new_with_look_behind(look_behind: usize) -> Self {
-        Self {
-            values: BTreeMap::new(),
-            look_behind,
-            start_time: Instant::now(),
-        }
-    }
-
-    pub fn add(&mut self, x: f64, y: f64) {
-        // 현재 시간
-        let now = Instant::now();
-
-        // 기준 시간 계산
-        let limit_time = now - Duration::from_secs(self.look_behind as u64);
-
-        // 오래된 값 제거
-        self.values.retain(|&key, _| {
-            let timestamp = Instant::now() - Duration::from_secs(key);
-            timestamp >= limit_time
-        });
-
-        // 측정값 추가 (동일한 x 값이 있을 경우 대체됨)
-        self.values.insert(x as u64, y);
-    }
-
-    pub fn plot_values(&self) -> PlotPoints {
-        // BTreeMap에서 y 값을 추출하여 Vec<(f64, f64)> 형태로 변환
-        let points: Vec<PlotPoint> = self
-            .values
-            .iter()
-            .map(|(key, &value)| PlotPoint {
-                x: *key as f64,
-                y: value,
-            }) // Float64를 f64로 변환
-            .collect();
-
-        // PlotPoints로 변환하여 반환
-        egui_plot::PlotPoints::Owned(points)
-    }
-}
 
 struct Stocki {
     // button_text: Arc<Mutex<String>>, // 선택한 주식 이름을 공유하는 Arc<Mutex>
@@ -95,15 +59,10 @@ struct Stocki {
     current_value: f64,
     target_value: f64,
 }
-#[derive(Debug)]
-pub struct MeasurementWindow {
-    pub values: BTreeMap<u64, f64>,
-    pub look_behind: usize,
-    start_time: Instant,
-}
+
 impl Stocki {
     fn default(look_behind: usize) -> Self {
-        let (tx, rx) = mpsc::channel();
+        // let (tx, rx) = mpsc::channel();
         let selected_type = Arc::new(Mutex::new("day".to_string())); // 초기 주식 이름
 
         let selected_stock = Arc::new(Mutex::new("AAPL".to_string())); // 초기 주식 이름
@@ -111,21 +70,25 @@ impl Stocki {
         let selected_stock_clone = Arc::clone(&selected_stock);
         let selected_type_clone = Arc::clone(&selected_type);
 
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_secs(1)); // 30초 대기
-                let stock_name = selected_stock_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
-                let stock_type = selected_type_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
+        // thread::spawn(move || {
+        //     loop {
+        //         thread::sleep(Duration::from_secs(1)); // 30초 대기
+        //         let stock_name = selected_stock_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
+        //         let stock_type = selected_type_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
 
-                let new_data = get_data(&stock_name, &stock_type); // 주식 데이터를 가져옴
-                if tx.send(new_data).is_err() {
-                    break; // 메인 스레드가 더 이상 데이터를 수신하지 않으면 종료
-                }
-            }
-        });
+        //         let new_data = get_data(&stock_name, &stock_type); // 주식 데이터를 가져옴
+        //         if tx.send(new_data).is_err() {
+        //             break; // 메인 스레드가 더 이상 데이터를 수신하지 않으면 종료
+        //         }
+        //     }
+        // });
+        let stock_name = selected_stock_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
+        let stock_type = selected_type_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
+        let new_data = get_data2(&stock_name, &stock_type); // 주식 데이터를 가져옴
+
         Self {
             measurements: Arc::new(Mutex::new(MeasurementWindow::new_with_look_behind(
-                look_behind,
+                look_behind,new_data
             ))),
             include_y: Vec::new(),
             last_update: Instant::now(), // Initialize the last update time
@@ -239,19 +202,21 @@ impl eframe::App for Stocki {
         let now: Instant = Instant::now();
 
         // Update target value every 3 seconds
-        if self.last_update.elapsed() >= Duration::from_secs(3) {
-            self.update_target();
-            self.last_update = now;
-        }
-        let elapsed = now
-            .duration_since(self.measurements.lock().unwrap().start_time)
-            .as_secs_f64();
-        self.current_value += 1.;
+        // if self.last_update.elapsed() >= Duration::from_secs(3) {
+        //     self.update_target();
+        //     self.last_update = now;
+        // }
+        // let elapsed = SystemTime::now()
+        //     .duration_since(UNIX_EPOCH)
+        //     .expect("Time went backwards")
+        //     .as_secs_f64();
+        // // println!("{}", elapsed);
+        // self.current_value += 10.;
 
-        self.measurements
-            .lock()
-            .unwrap()
-            .add(elapsed, self.current_value);
+        // self.measurements
+        //     .lock()
+        //     .unwrap()
+        //     .add(elapsed, self.current_value);
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 let is_web = cfg!(target_arch = "wasm32");
@@ -271,7 +236,7 @@ impl eframe::App for Stocki {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.group(|ui| {
-                       // let button_text = self.button_text.lock().unwrap().clone(); // 공유된 주식 이름 가져오기
+                        // let button_text = self.button_text.lock().unwrap().clone(); // 공유된 주식 이름 가져오기
                         // let stock_type = self.stock_type.lock().unwrap().clone(); // 공유된 주식 이름 가져오기
 
                         // ui.menu_button(&button_text, |ui| {
@@ -281,7 +246,7 @@ impl eframe::App for Stocki {
                         //             *self.button_text.lock().unwrap() = stock.to_string(); // 선택된 주식 이름 업데이트
                         //             self.stock_data = get_data(stock, &stock_type); // 클릭 시 즉시 데이터 업데이트
                         //             ui.close_menu(); // 메뉴 닫기
-                        //         } 
+                        //         }
                         //     }
                         // });
                     });
