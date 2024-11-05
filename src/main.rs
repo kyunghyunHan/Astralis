@@ -445,42 +445,8 @@ impl eframe::App for Stocki {
                                             .color(egui::Color32::from_rgb(0, 0, 255))
                                             .width(1.5)
                                             .name(self.long_ma.name()),
-                                    );
-                                    // 매매 신호 표시
-
-                                    // 그리고 update 함수의 신호 표시 부분을 다음과 같이 수정:
-                                    let signals = self.generate_signals(&short_ma, &long_ma);
-                                    // for signal in signals.iter() {
-                                    //     let x = signal.x;
-                                    //     let y = signal.y;
-
-                                    //     // short_ma와 long_ma의 해당 위치의 값을 안전하게 비교
-                                    //     let idx = x as usize;
-                                    //     if idx < short_ma.len() && idx < long_ma.len() {
-                                    //         if short_ma[idx].y > long_ma[idx].y {
-                                    //             // 매수 신호 (Up 마커)
-                                    //             plot_ui.points(
-                                    //                 egui_plot::Points::new(vec![[x, y]])
-                                    //                     .shape(egui_plot::MarkerShape::Up)
-                                    //                     .color(egui::Color32::from_rgb(0, 255, 0))
-                                    //                     .radius(5.0)
-                                    //                     .name("매수 신호"),
-                                    //             );
-                                    //         } else {
-                                    //             // 매도 신호 (Down 마커)
-                                    //             plot_ui.points(
-                                    //                 egui_plot::Points::new(vec![[x, y]])
-                                    //                     .shape(egui_plot::MarkerShape::Down)
-                                    //                     .color(egui::Color32::from_rgb(255, 0, 0))
-                                    //                     .radius(5.0)
-                                    //                     .name("매도 신호"),
-                                    //             );
-                                    //         }
-                                    //     }
-                                    // }
+                                    )
                                 }
-                                // 차트 범례 표시
-                                // plot_ui.set_legend(egui_plot::Legend::default());
                             }
                         }
                     });
@@ -489,12 +455,64 @@ impl eframe::App for Stocki {
                 // Volume Chart
                 ui.group(|ui| {
                     let plot = egui_plot::Plot::new("volume_chart")
-                        .height(100.0)
-                        .include_x(0.0)
-                        .include_x(100.0);
-
+                    .height(400.0)
+                    .include_x(0.0)
+                    .include_x(100000.0)
+                    .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
+                
                     plot.show(ui, |plot_ui| {
-                        // Add volume bars here
+                        // 거래량 데이터를 바 차트로 표시
+                        // if let Ok(measurements) = self.measurements.lock() {
+                        //     let volumes = measurements.volumes();
+                        //     let bars: Vec<Bar> = volumes
+                        //         .iter()
+                        //         .enumerate()
+                        //         .map(|(i, &volume)| {
+                        //             // 캔들 데이터로부터 상승/하락 여부 확인
+                        //             let color = if let Some(candle) = measurements.values.get(&(i as u64)) {
+                        //                 if candle.close <= candle.open {
+                        //                     egui::Color32::from_rgb(235, 52, 52)  // 상승 시 빨간색
+                        //                 } else {
+                        //                     egui::Color32::from_rgb(71, 135, 231) // 하락 시 파란색
+                        //                 }
+                        //             } else {
+                        //                 egui::Color32::GRAY
+                        //             };
+                                    
+                
+                        //             Bar::new(i as f64, volume)
+                        //                 .width(0.10)
+                        //                 .fill(color)
+                        //         })
+                        //         .collect();
+                
+                        //     plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                        // }
+                        if let Ok(measurements) = self.measurements.lock() {
+                            let volumes = measurements.volumes();
+                            let bars: Vec<egui_plot::Bar> = volumes
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &volume)| {
+                                    // 캔들 데이터로부터 상승/하락 여부 확인
+                                    let color = if let Some(candle) = measurements.values.get(&(i as u64)) {
+                                        if candle.close <= candle.open {
+                                            egui::Color32::from_rgb(235, 52, 52)  // 상승 시 빨간색
+                                        } else {
+                                            egui::Color32::from_rgb(71, 135, 231) // 하락 시 파란색
+                                        }
+                                    } else {
+                                        egui::Color32::GRAY
+                                    };
+                                    
+                                    egui_plot::Bar::new(i as f64, volume)
+                                        .width(1.0) // 너비를 증가시켜 시각적으로 더 잘 보이도록 설정
+                                        .fill(color)
+                                })
+                                .collect();
+                            
+                            plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                        }
                     });
                 });
             });
