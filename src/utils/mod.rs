@@ -93,3 +93,34 @@ pub fn get_data2(stock_name: &str, stock_type: &str) -> BTreeMap<u64, f64> {
         .collect();
     results
 }
+#[derive(Debug, Clone)]
+pub struct CandleData {
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,  // timestamp는 BTreeMap의 key로 사용되므로 여기서는 제거
+}
+pub fn get_data3(stock_name: &str, stock_type: &str) -> BTreeMap<u64, CandleData> {
+    let provider = yahoo::YahooConnector::new().unwrap();
+    let start = datetime!(2000-1-1 0:00:00.00 UTC);
+    let end = datetime!(2024-12-31 23:59:59.99 UTC);
+    let resp = tokio_test::block_on(provider.get_quote_history(stock_name, start, end)).unwrap();
+    let quotes = resp.quotes().unwrap();
+
+    let results: BTreeMap<u64, CandleData> = quotes
+        .into_par_iter()
+        .map(|quote| {
+            let candle = CandleData {
+                open: quote.open as f64,
+                high: quote.high as f64,
+                low: quote.low as f64,
+                close: quote.close as f64,
+                volume: quote.volume as f64,  // 볼륨 데이터 추가
+            };
+            (quote.timestamp, candle)
+        })
+        .collect();
+    
+    results
+}

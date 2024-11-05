@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
-use eframe::egui;
-use egui_plot::{Bar, BoxElem, PlotPoint, PlotPoints};
+use eframe::egui::{self, Vec2};
+use egui_plot::{Bar, BoxElem, BoxSpread, Plot, PlotPoint, PlotPoints};
 use std::cmp;
 use std::{
     sync::{
@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use stocki::{
     plot::plot,
     types::{MeasurementWindow, StockType},
-    utils::{get_data, get_data2},
+    utils::{get_data, get_data2, get_data3},
 };
 
 fn main() -> eframe::Result {
@@ -54,6 +54,9 @@ struct Stocki {
     stocks: Vec<String>,                // 사용 가능한 주식 목록
     chart_type: ChartType,
     time_frame: TimeFrame,
+    show_ma: bool,
+    short_ma: MAPeriod, // 변경
+    long_ma: MAPeriod,  // 변경
 }
 impl TimeFrame {
     fn to_api_string(&self) -> String {
@@ -77,7 +80,7 @@ impl Stocki {
 
         let stock_name = selected_stock_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
         let stock_type = selected_type_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
-        let new_data = get_data2(&stock_name, &stock_type); // 주식 데이터를 가져옴
+        let new_data = get_data3(&stock_name, &stock_type); // 주식 데이터를 가져옴
         let stocks = vec![
             "AAPL".to_string(),
             "GOOGL".to_string(),
@@ -98,9 +101,58 @@ impl Stocki {
             target_value: rand::random::<f64>() * 2.0 - 1.0,
             selected_stock,
             stocks,
-            chart_type: ChartType::Line, // 기본값 설정
-            time_frame: TimeFrame::Day,  // 기본값 설정
+            chart_type: ChartType::Line,
+            time_frame: TimeFrame::Day,
+            show_ma: true,
+            short_ma: MAPeriod::MA5, // 기본값
+            long_ma: MAPeriod::MA10, // 기본값
         }
+    }
+    fn calculate_moving_average(&self, prices: &[PlotPoint], period: usize) -> Vec<PlotPoint> {
+        let mut ma_values = Vec::new();
+
+        if period == 0 || period > prices.len() {
+            return ma_values;
+        }
+
+        // 각 시점에 대해 이동평균 계산
+        for i in (period - 1)..prices.len() {
+            // 현재 기간의 데이터만 사용하여 평균 계산
+            let window_start = i + 1 - period;
+            let window_end = i + 1;
+            let sum: f64 = prices[window_start..window_end].iter().map(|p| p.y).sum();
+            let ma = sum / period as f64;
+
+            // x 값은 원본 데이터의 x 값을 사용
+            let x = prices[i].x;
+            ma_values.push(PlotPoint::new(x, ma));
+        }
+
+        ma_values
+    }
+
+    // 매매 신호 생성 함수도 PlotPoint를 사용하도록 수정
+    fn generate_signals(&self, short_ma: &[PlotPoint], long_ma: &[PlotPoint]) -> Vec<PlotPoint> {
+        let mut signals = Vec::new();
+
+        // 주의: x 값을 그대로 인덱스로 사용하지 않고, 실제 데이터 포인트의 x 값을 사용
+        for i in 1..short_ma.len().min(long_ma.len()) {
+            let prev_short = short_ma[i - 1].y;
+            let prev_long = long_ma[i - 1].y;
+            let curr_short = short_ma[i].y;
+            let curr_long = long_ma[i].y;
+
+            // 골든 크로스 (단기선이 장기선을 상향 돌파)
+            if prev_short <= prev_long && curr_short > curr_long {
+                signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
+            }
+            // 데드 크로스 (단기선이 장기선을 하향 돌파)
+            else if prev_short >= prev_long && curr_short < curr_long {
+                signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
+            }
+        }
+
+        signals
     }
     fn update_target(&mut self) {
         self.target_value = rand::random::<f64>() * 2.0 - 1.0; // New random target between -1 and 1
@@ -113,7 +165,7 @@ impl Stocki {
     }
     fn update_stock_data(&mut self, stock_name: &str) {
         let stock_type = "day".to_string();
-        let new_data = get_data2(stock_name, &stock_type);
+        let new_data = get_data3(stock_name, &stock_type);
 
         // Lock measurements and update its content
         if let Ok(mut measurements) = self.measurements.lock() {
@@ -125,6 +177,7 @@ impl Stocki {
 impl eframe::App for Stocki {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now: Instant = Instant::now();
+
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 egui::menu::bar(ui, |ui| {
@@ -181,24 +234,26 @@ impl eframe::App for Stocki {
                     ui.heading("Stock Info");
                     if let Ok(measurements) = self.measurements.lock() {
                         if let PlotPoints::Owned(points) = measurements.plot_values() {
-                            if let (Some(last_value), Some(first_value)) = (points.last(), points.first()) {
+                            if let (Some(last_value), Some(first_value)) =
+                                (points.last(), points.first())
+                            {
                                 let current_price = last_value.y;
                                 let open_price = first_value.y;
-    
+
                                 // Calculate price changes
                                 let price_change = current_price - open_price;
                                 let price_change_percent = (price_change / open_price) * 100.0;
-    
+
                                 // Set color based on price change
                                 let change_color = if price_change >= 0.0 {
                                     egui::Color32::from_rgb(0, 255, 0) // Green for increase
                                 } else {
                                     egui::Color32::from_rgb(255, 0, 0) // Red for decrease
                                 };
-    
+
                                 // Display current price
                                 ui.label(format!("Current Price: ${:.2}", current_price));
-    
+
                                 // Display price change
                                 ui.colored_label(
                                     change_color,
@@ -209,41 +264,40 @@ impl eframe::App for Stocki {
                                         price_change_percent
                                     ),
                                 );
-                            if let Some(volume) = measurements.volumes().last() {
-                                let formatted_volume = if *volume >= 1_000_000.0 {
-                                    format!("{:.1}M", volume / 1_000_000.0)
-                                } else if *volume >= 1_000.0 {
-                                    format!("{:.1}K", volume / 1_000.0)
-                                } else {
-                                    format!("{:.0}", volume)
-                                };
-                                ui.label(format!("Volume: {}", formatted_volume));
-                            }
-                            // 고가/저가 계산
-                            let high_price =
-                                points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
-                            let low_price =
-                                points.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
-
-                            ui.label(format!("High: ${:.2}", high_price));
-                            ui.label(format!("Low: ${:.2}", low_price));
-
-                            // 시간 정보
-                            ui.label(format!(
-                                "Time Frame: {}",
-                                match self.time_frame {
-                                    TimeFrame::Day => "1 Day",
-                                    TimeFrame::Week => "1 Week",
-                                    TimeFrame::Month => "1 Month",
-                                    TimeFrame::Year => "1 Year",
+                                if let Some(volume) = measurements.volumes().last() {
+                                    let formatted_volume = if *volume >= 1_000_000.0 {
+                                        format!("{:.1}M", volume / 1_000_000.0)
+                                    } else if *volume >= 1_000.0 {
+                                        format!("{:.1}K", volume / 1_000.0)
+                                    } else {
+                                        format!("{:.0}", volume)
+                                    };
+                                    ui.label(format!("Volume: {}", formatted_volume));
                                 }
-                            ));
+                                // 고가/저가 계산
+                                let high_price =
+                                    points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+                                let low_price =
+                                    points.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+
+                                ui.label(format!("High: ${:.2}", high_price));
+                                ui.label(format!("Low: ${:.2}", low_price));
+
+                                // 시간 정보
+                                ui.label(format!(
+                                    "Time Frame: {}",
+                                    match self.time_frame {
+                                        TimeFrame::Day => "1 Day",
+                                        TimeFrame::Week => "1 Week",
+                                        TimeFrame::Month => "1 Month",
+                                        TimeFrame::Year => "1 Year",
+                                    }
+                                ));
+                            }
                         }
                     }
-                }
+                });
             });
-        });
-
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical(|ui| {
@@ -252,6 +306,54 @@ impl eframe::App for Stocki {
                     ui.selectable_value(&mut self.chart_type, ChartType::Candle, "Candle");
                     ui.selectable_value(&mut self.chart_type, ChartType::Line, "Line");
                     ui.add_space(32.0);
+                    ui.checkbox(&mut self.show_ma, "Moving Averages");
+                    if self.show_ma {
+                        ui.menu_button(format!("{}", self.short_ma.name()), |ui| {
+                            if ui.button("5MA").clicked() {
+                                self.short_ma = MAPeriod::MA5;
+                                ui.close_menu();
+                            }
+                            if ui.button("10MA").clicked() {
+                                self.short_ma = MAPeriod::MA10;
+                                ui.close_menu();
+                            }
+                            if ui.button("20MA").clicked() {
+                                self.short_ma = MAPeriod::MA20;
+                                ui.close_menu();
+                            }
+                            if ui.button("60MA").clicked() {
+                                self.short_ma = MAPeriod::MA60;
+                                ui.close_menu();
+                            }
+                            if ui.button("224MA").clicked() {
+                                self.short_ma = MAPeriod::MA224;
+                                ui.close_menu();
+                            }
+                        });
+
+                        ui.menu_button(format!("{}", self.long_ma.name()), |ui| {
+                            if ui.button("5MA").clicked() {
+                                self.long_ma = MAPeriod::MA5;
+                                ui.close_menu();
+                            }
+                            if ui.button("10MA").clicked() {
+                                self.long_ma = MAPeriod::MA10;
+                                ui.close_menu();
+                            }
+                            if ui.button("20MA").clicked() {
+                                self.long_ma = MAPeriod::MA20;
+                                ui.close_menu();
+                            }
+                            if ui.button("60MA").clicked() {
+                                self.long_ma = MAPeriod::MA60;
+                                ui.close_menu();
+                            }
+                            if ui.button("224MA").clicked() {
+                                self.long_ma = MAPeriod::MA224;
+                                ui.close_menu();
+                            }
+                        });
+                    }
                     ui.selectable_value(&mut self.time_frame, TimeFrame::Day, "1D");
                     ui.selectable_value(&mut self.time_frame, TimeFrame::Week, "1W");
                     ui.selectable_value(&mut self.time_frame, TimeFrame::Month, "1M");
@@ -272,6 +374,12 @@ impl eframe::App for Stocki {
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
+                            let prices: Vec<f64> =
+                                if let PlotPoints::Owned(points) = measurements.plot_values() {
+                                    points.iter().map(|p| p.y).collect()
+                                } else {
+                                    Vec::new()
+                                };
                             match self.chart_type {
                                 ChartType::Line => {
                                     plot_ui.line(
@@ -280,9 +388,99 @@ impl eframe::App for Stocki {
                                             .width(2.0),
                                     );
                                 }
+                                // Inside the match self.chart_type block, replace the Candle case with:
                                 ChartType::Candle => {
-                                    // Implement candle chart rendering
+                                    // if let Ok(measurements) = self.measurements.lock() {
+                                    //     println!("{:?}",measurements);
+                                    //     // 한 번에 모든 캔들 데이터 준비
+
+                                    // }
+                                    let candles: Vec<BoxElem> = measurements
+                                        .values
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, (index, candle))| {
+                                            let spread = BoxSpread {
+                                                lower_whisker: candle.low,
+                                                quartile1: candle.open.min(candle.close),
+                                                median: (candle.open + candle.close) / 2.0,
+                                                quartile3: candle.open.max(candle.close),
+                                                upper_whisker: candle.high,
+                                            };
+
+                                            let color = if candle.close >= candle.open {
+                                                egui::Color32::from_rgb(235, 52, 52)
+                                            } else {
+                                                egui::Color32::from_rgb(71, 135, 231)
+                                            };
+
+                                            BoxElem::new(*index as f64, spread)
+                                                .fill(color)
+                                                .stroke(egui::Stroke::new(1.0, color))
+                                                .whisker_width(0.5)
+                                        })
+                                        .collect();
+
+                                    plot_ui.box_plot(egui_plot::BoxPlot::new(candles));
                                 }
+                            }
+
+                            if self.show_ma {
+                                // 단기 이동평균선
+                                if let PlotPoints::Owned(points) = measurements.plot_values() {
+                                    let short_ma = self
+                                        .calculate_moving_average(&points, self.short_ma.value());
+                                    plot_ui.line(
+                                        egui_plot::Line::new(PlotPoints::Owned(short_ma.clone()))
+                                            .color(egui::Color32::from_rgb(255, 0, 0))
+                                            .width(1.5)
+                                            .name(self.short_ma.name()),
+                                    );
+
+                                    // 장기 이동평균선
+                                    let long_ma = self
+                                        .calculate_moving_average(&points, self.long_ma.value());
+                                    plot_ui.line(
+                                        egui_plot::Line::new(PlotPoints::Owned(long_ma.clone()))
+                                            .color(egui::Color32::from_rgb(0, 0, 255))
+                                            .width(1.5)
+                                            .name(self.long_ma.name()),
+                                    );
+                                    // 매매 신호 표시
+
+                                    // 그리고 update 함수의 신호 표시 부분을 다음과 같이 수정:
+                                    let signals = self.generate_signals(&short_ma, &long_ma);
+                                    // for signal in signals.iter() {
+                                    //     let x = signal.x;
+                                    //     let y = signal.y;
+
+                                    //     // short_ma와 long_ma의 해당 위치의 값을 안전하게 비교
+                                    //     let idx = x as usize;
+                                    //     if idx < short_ma.len() && idx < long_ma.len() {
+                                    //         if short_ma[idx].y > long_ma[idx].y {
+                                    //             // 매수 신호 (Up 마커)
+                                    //             plot_ui.points(
+                                    //                 egui_plot::Points::new(vec![[x, y]])
+                                    //                     .shape(egui_plot::MarkerShape::Up)
+                                    //                     .color(egui::Color32::from_rgb(0, 255, 0))
+                                    //                     .radius(5.0)
+                                    //                     .name("매수 신호"),
+                                    //             );
+                                    //         } else {
+                                    //             // 매도 신호 (Down 마커)
+                                    //             plot_ui.points(
+                                    //                 egui_plot::Points::new(vec![[x, y]])
+                                    //                     .shape(egui_plot::MarkerShape::Down)
+                                    //                     .color(egui::Color32::from_rgb(255, 0, 0))
+                                    //                     .radius(5.0)
+                                    //                     .name("매도 신호"),
+                                    //             );
+                                    //         }
+                                    //     }
+                                    // }
+                                }
+                                // 차트 범례 표시
+                                // plot_ui.set_legend(egui_plot::Legend::default());
                             }
                         }
                     });
@@ -331,4 +529,41 @@ enum TimeFrame {
     Week,
     Month,
     Year,
+}
+// 이동평균선 기간을 위한 enum 추가
+#[derive(PartialEq, Clone, Debug)]
+enum MAPeriod {
+    MA5,
+    MA10,
+    MA20,
+    MA60,
+    MA224,
+}
+impl MAPeriod {
+    fn value(&self) -> usize {
+        match self {
+            MAPeriod::MA5 => 5,
+            MAPeriod::MA10 => 10,
+            MAPeriod::MA20 => 20,
+            MAPeriod::MA60 => 60,
+            MAPeriod::MA224 => 224,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            MAPeriod::MA5 => "5MA",
+            MAPeriod::MA10 => "10MA",
+            MAPeriod::MA20 => "20MA",
+            MAPeriod::MA60 => "60MA",
+            MAPeriod::MA224 => "224MA",
+        }
+    }
+}
+struct CandleData {
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+    timestamp: f64, // x축 값
 }
