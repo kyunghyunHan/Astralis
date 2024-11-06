@@ -7,7 +7,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use crate::utils::CandleData;
+use crate::utils::StockData;
 #[derive(Clone)]
 pub enum StockType {
     DAY,
@@ -17,13 +17,13 @@ pub enum StockType {
 use std::collections::BTreeMap;
 #[derive(Debug,Clone)]
 pub struct MeasurementWindow {
-    pub values: BTreeMap<u64, CandleData>,
+    pub values: BTreeMap<u64, StockData>,
     pub look_behind: usize,
     pub start_time: Instant,
     volumes: Vec<f64>, // Added volumes field
 }
 impl MeasurementWindow {
-    pub fn new_with_look_behind(look_behind: usize, data: BTreeMap<u64, CandleData>) -> Self {
+    pub fn new_with_look_behind(look_behind: usize, data: BTreeMap<u64, StockData>) -> Self {
         Self {
             values: data,
             look_behind,
@@ -31,7 +31,7 @@ impl MeasurementWindow {
             volumes: Vec::new(), // Initialize volumes
         }
     }
-    pub fn add(&mut self, x: u64, candle: CandleData) {
+    pub fn add(&mut self, x: u64, candle: StockData) {
         let now = Instant::now();
         let limit_time = now - Duration::from_secs(self.look_behind as u64);
 
@@ -77,7 +77,7 @@ impl MeasurementWindow {
     }
 
     // Helper method to get points as Vec for iteration
-    pub fn get_points(&self) -> Vec<(u64, CandleData)> {
+    pub fn get_points(&self) -> Vec<(u64, StockData)> {
         self.values
             .iter()
             .map(|(&key, value)| (key, value.clone()))

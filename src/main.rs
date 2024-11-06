@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use stocki::{
     plot::plot,
     types::{MeasurementWindow, StockType},
-    utils::{get_data, get_data2, get_data3},
+    utils::get_data,
 };
 
 fn main() -> eframe::Result {
@@ -80,7 +80,7 @@ impl Stocki {
 
         let stock_name = selected_stock_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
         let stock_type = selected_type_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
-        let new_data = get_data3(&stock_name, &stock_type); // 주식 데이터를 가져옴
+        let new_data = get_data(&stock_name, &stock_type); // 주식 데이터를 가져옴
         let stocks = vec![
             "AAPL".to_string(),
             "GOOGL".to_string(),
@@ -165,7 +165,7 @@ impl Stocki {
     }
     fn update_stock_data(&mut self, stock_name: &str) {
         let stock_type = "day".to_string();
-        let new_data = get_data3(stock_name, &stock_type);
+        let new_data = get_data(stock_name, &stock_type);
 
         // Lock measurements and update its content
         if let Ok(mut measurements) = self.measurements.lock() {
@@ -363,65 +363,89 @@ impl eframe::App for Stocki {
                 // Main Chart
                 ui.group(|ui| {
                     let mut plot = egui_plot::Plot::new("stock_chart")
-                        .height(400.0)
-                        .include_x(0.0)
-                        .include_x(100.0)
+                        // .height(400.0)
+                        .view_aspect(3.0) // 3.0에서 8.0으로 증가
+                        .min_size(Vec2::from([ui.available_width(), 400.0])) // 가능한 전체 너비 사용
+                        // .data_aspect(0.2)  // 데이터 비율 추가
+                        // .allow_boxed_zoom(true)
+                        // .allow_drag(true)
+                        // .allow_scroll(true)
+                        // .data_aspect(1.0) // 이 값을 조절하여 차트의 가로/세로 비율 조정
+                        // .include_x(1000000.0)
+                        // .include_x(100.0)
                         .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
+                    // if let Some((min_y, max_y)) = y_range {
+                    //     plot = plot
+                    //         .include_y(min_y)
+                    //         .include_y(max_y);
+                    // }
 
-                    for y in self.include_y.iter() {
-                        plot = plot.include_y(*y);
-                    }
+                    // plot = plot
+                    //     .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y))
+                    //     .data_aspect(0.5);
+
+                    // for y in self.include_y.iter() {
+                    //     plot = plot.include_y(*y);
+                    // }
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
-                            let prices: Vec<f64> =
-                                if let PlotPoints::Owned(points) = measurements.plot_values() {
-                                    points.iter().map(|p| p.y).collect()
-                                } else {
-                                    Vec::new()
-                                };
                             match self.chart_type {
                                 ChartType::Line => {
+                                    let line_points: Vec<[f64; 2]> = measurements
+                                        .values
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, (_, candle))| [i as f64, candle.close])
+                                        .collect();
+                                    println!("{:?}", line_points[0]);
                                     plot_ui.line(
-                                        egui_plot::Line::new(measurements.plot_values())
-                                            .color(egui::Color32::from_rgb(0, 150, 255))
-                                            .width(2.0),
+                                        egui_plot::Line::new(egui_plot::PlotPoints::new(
+                                            line_points,
+                                        ))
+                                        .color(egui::Color32::from_rgb(0, 150, 255))
+                                        .width(2.0),
                                     );
                                 }
                                 // Inside the match self.chart_type block, replace the Candle case with:
                                 ChartType::Candle => {
-                                    // if let Ok(measurements) = self.measurements.lock() {
-                                    //     println!("{:?}",measurements);
-                                    //     // 한 번에 모든 캔들 데이터 준비
-
-                                    // }
                                     let candles: Vec<BoxElem> = measurements
                                         .values
                                         .iter()
                                         .enumerate()
-                                        .map(|(i, (index, candle))| {
-                                            let spread = BoxSpread {
-                                                lower_whisker: candle.low,
-                                                quartile1: candle.open.min(candle.close),
-                                                median: (candle.open + candle.close) / 2.0,
-                                                quartile3: candle.open.max(candle.close),
-                                                upper_whisker: candle.high,
-                                            };
+                                        .map(|(i, (_, candle))| {
+                                            let lower_whisker = candle.low; // 최저가
+                                            let upper_whisker = candle.high; // 최고가
+                                            let lower_bound = candle.open.min(candle.close); // 몸체 아래쪽 경계
+                                            let upper_bound = candle.open.max(candle.close); // 몸체 위쪽 경계
+                                            let median = (candle.open + candle.close) / 2.0; // 중앙값
+
+                                            let spread = BoxSpread::new(
+                                                lower_whisker, // 최저가
+                                                lower_bound,   // 몸체 아래쪽
+                                                median,        // 중앙값
+                                                upper_bound,   // 몸체 위쪽
+                                                upper_whisker, // 최고가
+                                            );
 
                                             let color = if candle.close >= candle.open {
                                                 egui::Color32::from_rgb(235, 52, 52)
+                                            // 상승봉 빨간색
                                             } else {
                                                 egui::Color32::from_rgb(71, 135, 231)
+                                                // 하락봉 파란색
                                             };
 
-                                            BoxElem::new(*index as f64, spread)
+                                            BoxElem::new(i as f64, spread)
                                                 .fill(color)
-                                                .stroke(egui::Stroke::new(1.0, color))
-                                                .whisker_width(0.5)
+                                                .stroke(egui::Stroke::new(2.0, color))
+                                                .whisker_width(0.5) // 심지 너비
+                                                .box_width(0.8) // 몸통 너비
                                         })
                                         .collect();
 
-                                    plot_ui.box_plot(egui_plot::BoxPlot::new(candles));
+                                    let box_plot = egui_plot::BoxPlot::new(candles);
+                                    plot_ui.box_plot(box_plot);
                                 }
                             }
 
@@ -455,11 +479,11 @@ impl eframe::App for Stocki {
                 // Volume Chart
                 ui.group(|ui| {
                     let plot = egui_plot::Plot::new("volume_chart")
-                    .height(400.0)
-                    .include_x(0.0)
-                    .include_x(100000.0)
-                    .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
-                
+                        .height(400.0)
+                        .include_x(0.0)
+                        .include_x(100.0)
+                        .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
+
                     plot.show(ui, |plot_ui| {
                         // 거래량 데이터를 바 차트로 표시
                         // if let Ok(measurements) = self.measurements.lock() {
@@ -478,14 +502,13 @@ impl eframe::App for Stocki {
                         //             } else {
                         //                 egui::Color32::GRAY
                         //             };
-                                    
-                
+
                         //             Bar::new(i as f64, volume)
                         //                 .width(0.10)
                         //                 .fill(color)
                         //         })
                         //         .collect();
-                
+
                         //     plot_ui.bar_chart(egui_plot::BarChart::new(bars));
                         // }
                         if let Ok(measurements) = self.measurements.lock() {
@@ -495,22 +518,26 @@ impl eframe::App for Stocki {
                                 .enumerate()
                                 .map(|(i, &volume)| {
                                     // 캔들 데이터로부터 상승/하락 여부 확인
-                                    let color = if let Some(candle) = measurements.values.get(&(i as u64)) {
+                                    let color = if let Some(candle) =
+                                        measurements.values.get(&(i as u64))
+                                    {
                                         if candle.close <= candle.open {
-                                            egui::Color32::from_rgb(235, 52, 52)  // 상승 시 빨간색
+                                            egui::Color32::from_rgb(235, 52, 52)
+                                        // 상승 시 빨간색
                                         } else {
-                                            egui::Color32::from_rgb(71, 135, 231) // 하락 시 파란색
+                                            egui::Color32::from_rgb(71, 135, 231)
+                                            // 하락 시 파란색
                                         }
                                     } else {
                                         egui::Color32::GRAY
                                     };
-                                    
+
                                     egui_plot::Bar::new(i as f64, volume)
                                         .width(1.0) // 너비를 증가시켜 시각적으로 더 잘 보이도록 설정
                                         .fill(color)
                                 })
                                 .collect();
-                            
+
                             plot_ui.bar_chart(egui_plot::BarChart::new(bars));
                         }
                     });
