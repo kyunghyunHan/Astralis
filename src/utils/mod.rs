@@ -108,20 +108,19 @@ pub fn get_data(stock_name: &str, stock_type: &str) -> BTreeMap<u64, StockData> 
     let resp = tokio_test::block_on(provider.get_quote_history(stock_name, start, end)).unwrap();
     let quotes = resp.quotes().unwrap();
 
-    let results: BTreeMap<u64, StockData> = quotes
-    .into_par_iter()
-    .enumerate()
-    .map(|(index, quote)| {
-        let candle = StockData {
-            open: quote.open as f64,
-            high: quote.high as f64,
-            low: quote.low as f64,
-            close: quote.close as f64,
-            volume: quote.volume as f64, // 볼륨 데이터 추가
-        };
-        (index as u64, candle)
-    })
-    .collect();
-
-    results
+    quotes
+        .into_par_iter()
+        .enumerate()
+        .map(|(index, quote)| {
+            let candle = StockData {
+                open: quote.open as f64,
+                high: quote.high as f64,
+                low: quote.low as f64,
+                close: quote.close as f64,
+                volume: quote.volume as f64,
+            };
+            // 간격 조정을 위해 `index`를 키로 사용
+            (index as u64, candle)
+        })
+        .collect()
 }

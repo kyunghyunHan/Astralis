@@ -13,7 +13,6 @@ use std::{
 };
 //lib
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use stocki::{
     plot::plot,
@@ -103,7 +102,7 @@ impl Stocki {
             stocks,
             chart_type: ChartType::Line,
             time_frame: TimeFrame::Day,
-            show_ma: true,
+            show_ma: false,
             short_ma: MAPeriod::MA5, // 기본값
             long_ma: MAPeriod::MA10, // 기본값
         }
@@ -364,29 +363,10 @@ impl eframe::App for Stocki {
                 ui.group(|ui| {
                     let mut plot = egui_plot::Plot::new("stock_chart")
                         // .height(400.0)
-                        .view_aspect(3.0) // 3.0에서 8.0으로 증가
+                        .data_aspect(3.2)
+                        .view_aspect(4.0) // 3.0에서 8.0으로 증가
                         .min_size(Vec2::from([ui.available_width(), 400.0])) // 가능한 전체 너비 사용
-                        // .data_aspect(0.2)  // 데이터 비율 추가
-                        // .allow_boxed_zoom(true)
-                        // .allow_drag(true)
-                        // .allow_scroll(true)
-                        // .data_aspect(1.0) // 이 값을 조절하여 차트의 가로/세로 비율 조정
-                        // .include_x(1000000.0)
-                        // .include_x(100.0)
                         .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
-                    // if let Some((min_y, max_y)) = y_range {
-                    //     plot = plot
-                    //         .include_y(min_y)
-                    //         .include_y(max_y);
-                    // }
-
-                    // plot = plot
-                    //     .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y))
-                    //     .data_aspect(0.5);
-
-                    // for y in self.include_y.iter() {
-                    //     plot = plot.include_y(*y);
-                    // }
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
