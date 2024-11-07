@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
-use eframe::egui::{self, Vec2};
-use egui_plot::{Bar, BoxElem, BoxSpread, Plot, PlotPoint, PlotPoints};
+use eframe::egui::{self, Rangef, Vec2, Vec2b, WidgetText};
+use egui_plot::{
+    Axis, AxisHints, Bar, BoxElem, BoxSpread, GridMark, Placement, Plot, PlotPoint, PlotPoints,
+    VPlacement,
+};
 use std::cmp;
 use std::{
     sync::{
@@ -361,12 +364,17 @@ impl eframe::App for Stocki {
 
                 // Main Chart
                 ui.group(|ui| {
-                    let mut plot = egui_plot::Plot::new("stock_chart")
-                        // .height(400.0)
-                        .data_aspect(3.2)
-                        .view_aspect(4.0) // 3.0에서 8.0으로 증가
-                        .min_size(Vec2::from([ui.available_width(), 400.0])) // 가능한 전체 너비 사용
-                        .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
+                    let plot = egui_plot::Plot::new("stock_chart")
+                        .height(500.0)
+                        .width(800.)
+                        .view_aspect(3.0) // 3.0에서 8.0으로 증가
+                        // .min_size(Vec2::from((10000.,1000.)))
+                        .auto_bounds(Vec2b::new(false, true)) // [x축 자동조절, y축 자동조절]
+                        .include_x(2000.0) // x축 끝점
+                        .include_x(6000.0); // x축 시작점 (더 큰 값을 먼저)
+                                            // .include_y(0.0)
+                                            // .include_y(100.0)
+                                            // .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
@@ -378,7 +386,7 @@ impl eframe::App for Stocki {
                                         .enumerate()
                                         .map(|(i, (_, candle))| [i as f64, candle.close])
                                         .collect();
-                                    println!("{:?}", line_points[0]);
+                                    // println!("{:?}", line_points[0]);
                                     plot_ui.line(
                                         egui_plot::Line::new(egui_plot::PlotPoints::new(
                                             line_points,
@@ -420,7 +428,7 @@ impl eframe::App for Stocki {
                                                 .fill(color)
                                                 .stroke(egui::Stroke::new(2.0, color))
                                                 .whisker_width(0.5) // 심지 너비
-                                                .box_width(0.8) // 몸통 너비
+                                                .box_width(0.6) // 몸통 너비
                                         })
                                         .collect();
 
@@ -459,38 +467,40 @@ impl eframe::App for Stocki {
                 // Volume Chart
                 ui.group(|ui| {
                     let plot = egui_plot::Plot::new("volume_chart")
-                        .height(400.0)
-                        .include_x(0.0)
-                        .include_x(100.0)
+                        .height(200.0)
+                        .include_y(0.0)
+                        .include_y(100.0)
                         .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
 
                     plot.show(ui, |plot_ui| {
-                        // 거래량 데이터를 바 차트로 표시
-                        // if let Ok(measurements) = self.measurements.lock() {
-                        //     let volumes = measurements.volumes();
-                        //     let bars: Vec<Bar> = volumes
-                        //         .iter()
-                        //         .enumerate()
-                        //         .map(|(i, &volume)| {
-                        //             // 캔들 데이터로부터 상승/하락 여부 확인
-                        //             let color = if let Some(candle) = measurements.values.get(&(i as u64)) {
-                        //                 if candle.close <= candle.open {
-                        //                     egui::Color32::from_rgb(235, 52, 52)  // 상승 시 빨간색
-                        //                 } else {
-                        //                     egui::Color32::from_rgb(71, 135, 231) // 하락 시 파란색
-                        //                 }
-                        //             } else {
-                        //                 egui::Color32::GRAY
-                        //             };
+                        if let Ok(measurements) = self.measurements.lock() {
+                            let volumes = measurements.volumes();
 
-                        //             Bar::new(i as f64, volume)
-                        //                 .width(0.10)
-                        //                 .fill(color)
-                        //         })
-                        //         .collect();
+                            let bars: Vec<Bar> = volumes
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &volume)| {
+                                    // 캔들 데이터로부터 상승/하락 여부 확인
+                                    let color = if let Some(candle) =
+                                        measurements.values.get(&(i as u64))
+                                    {
+                                        if candle.close <= candle.open {
+                                            egui::Color32::from_rgb(235, 52, 52)
+                                        // 상승 시 빨간색
+                                        } else {
+                                            egui::Color32::from_rgb(71, 135, 231)
+                                            // 하락 시 파란색
+                                        }
+                                    } else {
+                                        egui::Color32::GRAY
+                                    };
 
-                        //     plot_ui.bar_chart(egui_plot::BarChart::new(bars));
-                        // }
+                                    Bar::new(i as f64, volume).width(0.10).fill(color)
+                                })
+                                .collect();
+
+                            plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                        }
                         if let Ok(measurements) = self.measurements.lock() {
                             let volumes = measurements.volumes();
                             let bars: Vec<egui_plot::Bar> = volumes
