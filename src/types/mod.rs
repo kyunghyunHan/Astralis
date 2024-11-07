@@ -1,91 +1,49 @@
-use egui_plot::{PlotPoint, PlotPoints};
-use std::{
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
-    },
-    thread,
-    time::{Duration, Instant},
-};
-use crate::utils::StockData;
+pub mod measurement_window;
+pub mod stock_data;
+use std::collections::BTreeMap;
+use std::time::Instant;
+pub mod maperiod;
+pub mod time_frame;
+
 #[derive(Clone)]
 pub enum StockType {
     DAY,
     YEAR1,
 }
-
-use std::collections::BTreeMap;
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct MeasurementWindow {
     pub values: BTreeMap<u64, StockData>,
     pub look_behind: usize,
     pub start_time: Instant,
     volumes: Vec<f64>, // Added volumes field
 }
-impl MeasurementWindow {
-    pub fn new_with_look_behind(look_behind: usize, data: BTreeMap<u64, StockData>) -> Self {
-        Self {
-            values: data,
-            look_behind,
-            start_time: Instant::now(),
-            volumes: Vec::new(), // Initialize volumes
-        }
-    }
-    pub fn add(&mut self, x: u64, candle: StockData) {
-        let now = Instant::now();
-        let limit_time = now - Duration::from_secs(self.look_behind as u64);
 
-        // Remove old values
-        self.values.retain(|&key, _| {
-            let timestamp = self.start_time + Duration::from_secs(key);
-            timestamp >= limit_time
-        });
-
-        // Add new value
-        self.values.insert(x, candle);
-    }
-
-
-    pub fn plot_values(&self) -> PlotPoints {
-        PlotPoints::Owned(
-            self.values
-                .iter()
-                .map(|(timestamp, candle)| PlotPoint::new(*timestamp as f64, candle.close))
-                .collect(),
-        )
-    }
-
-    pub fn volumes(&self) -> &Vec<f64> {
-        &self.volumes
-    }
-
-    // pub fn high_price(&self) -> Option<f64> {
-    //     self.values
-    //         .values()
-    //         .copied()
-    //         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-    // }
-    pub fn highs(&self) -> Vec<(u64, f64)> {
-        self.values
-            .iter()
-            .map(|(t, candle)| (*t, candle.high))
-            .collect()
-    }
-    pub fn low_price(&self) -> Vec<(u64, f64)> {
-        self.values.iter().map(|(t, candle)| (*t, candle.low)).collect()
-
-    }
-
-    // Helper method to get points as Vec for iteration
-    pub fn get_points(&self) -> Vec<(u64, StockData)> {
-        self.values
-            .iter()
-            .map(|(&key, value)| (key, value.clone()))
-            .collect()
-    }
-
-    // Add method to update volumes
-    pub fn add_volume(&mut self, volume: f64) {
-        self.volumes.push(volume);
-    }
+#[derive(Debug, Clone)]
+pub struct StockData {
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+#[derive(PartialEq, Clone, Debug)] // derive 속성 추가
+pub enum ChartType {
+    Candle,
+    Line,
+}
+#[derive(PartialEq, Clone, Debug)] // derive 속성 추가
+pub enum TimeFrame {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+// 이동평균선 기간을 위한 enum 추가
+#[derive(PartialEq, Clone, Debug)]
+pub enum MAPeriod {
+    MA5,
+    MA10,
+    MA20,
+    MA60,
+    MA224,
 }

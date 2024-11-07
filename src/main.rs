@@ -1,27 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
-use eframe::egui::{self, Rangef, Vec2, Vec2b, WidgetText};
-use egui_plot::{
-    Axis, AxisHints, Bar, BoxElem, BoxSpread, GridMark, Placement, Plot, PlotPoint, PlotPoints,
-    VPlacement,
-};
-use std::cmp;
+use eframe::egui::{self, Vec2b};
+use egui_plot::{Bar, BoxElem, BoxSpread, PlotPoint, PlotPoints};
 use std::{
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
-    },
-    thread,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::Instant,
 };
-//lib
-use std::collections::BTreeMap;
 
-use stocki::{
-    plot::plot,
-    types::{MeasurementWindow, StockType},
-    utils::get_data,
-};
+use stocki::types::{ChartType, MAPeriod, MeasurementWindow, StockData, TimeFrame};
 
 fn main() -> eframe::Result {
     // let args = Args::parse();
@@ -31,7 +17,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 900.0]),
         ..Default::default()
     };
-    let mut app = Stocki::default(1000);
+    let app = Stocki::default(1000);
 
     eframe::run_native(
         "My egui App",
@@ -57,19 +43,10 @@ struct Stocki {
     chart_type: ChartType,
     time_frame: TimeFrame,
     show_ma: bool,
-    short_ma: MAPeriod, // 변경
-    long_ma: MAPeriod,  // 변경
+    pub short_ma: MAPeriod, // 변경
+    pub long_ma: MAPeriod,  // 변경
 }
-impl TimeFrame {
-    fn to_api_string(&self) -> String {
-        match self {
-            TimeFrame::Day => "day".to_string(),
-            TimeFrame::Week => "week".to_string(),
-            TimeFrame::Month => "month".to_string(),
-            TimeFrame::Year => "year".to_string(),
-        }
-    }
-}
+
 impl Stocki {
     fn default(look_behind: usize) -> Self {
         // let (tx, rx) = mpsc::channel();
@@ -82,7 +59,7 @@ impl Stocki {
 
         let stock_name = selected_stock_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
         let stock_type = selected_type_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
-        let new_data = get_data(&stock_name, &stock_type); // 주식 데이터를 가져옴
+        let new_data = StockData::get_data(&stock_name, &stock_type); // 주식 데이터를 가져옴
         let stocks = vec![
             "AAPL".to_string(),
             "GOOGL".to_string(),
@@ -167,7 +144,7 @@ impl Stocki {
     }
     fn update_stock_data(&mut self, stock_name: &str) {
         let stock_type = "day".to_string();
-        let new_data = get_data(stock_name, &stock_type);
+        let new_data = StockData::get_data(stock_name, &stock_type);
 
         // Lock measurements and update its content
         if let Ok(mut measurements) = self.measurements.lock() {
@@ -553,52 +530,3 @@ impl eframe::App for Stocki {
     }
 }
 // Add these enums to your Stocki struct
-#[derive(PartialEq, Clone, Debug)] // derive 속성 추가
-enum ChartType {
-    Candle,
-    Line,
-}
-#[derive(PartialEq, Clone, Debug)] // derive 속성 추가
-enum TimeFrame {
-    Day,
-    Week,
-    Month,
-    Year,
-}
-// 이동평균선 기간을 위한 enum 추가
-#[derive(PartialEq, Clone, Debug)]
-enum MAPeriod {
-    MA5,
-    MA10,
-    MA20,
-    MA60,
-    MA224,
-}
-impl MAPeriod {
-    fn value(&self) -> usize {
-        match self {
-            MAPeriod::MA5 => 5,
-            MAPeriod::MA10 => 10,
-            MAPeriod::MA20 => 20,
-            MAPeriod::MA60 => 60,
-            MAPeriod::MA224 => 224,
-        }
-    }
-
-    fn name(&self) -> &str {
-        match self {
-            MAPeriod::MA5 => "5MA",
-            MAPeriod::MA10 => "10MA",
-            MAPeriod::MA20 => "20MA",
-            MAPeriod::MA60 => "60MA",
-            MAPeriod::MA224 => "224MA",
-        }
-    }
-}
-struct CandleData {
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    timestamp: f64, // x축 값
-}
