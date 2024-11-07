@@ -345,13 +345,13 @@ impl eframe::App for Stocki {
                         .height(500.0)
                         .width(800.)
                         .view_aspect(3.0) // 3.0에서 8.0으로 증가
-                        // .min_size(Vec2::from((10000.,1000.)))
+                        .show_axes(false) // y축 숨기기
                         .auto_bounds(Vec2b::new(false, true)) // [x축 자동조절, y축 자동조절]
                         .include_x(2000.0) // x축 끝점
-                        .include_x(6000.0); // x축 시작점 (더 큰 값을 먼저)
-                                            // .include_y(0.0)
-                                            // .include_y(100.0)
-                                            // .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
+                        .include_x(self.measurements.lock().unwrap().values.len() as f64 + 1.); // x축 시작점 (더 큰 값을 먼저)
+                                                                                                // .include_y(0.0)
+                                                                                                // .include_y(100.0)
+                                                                                                // .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
@@ -445,67 +445,50 @@ impl eframe::App for Stocki {
                 ui.group(|ui| {
                     let plot = egui_plot::Plot::new("volume_chart")
                         .height(200.0)
-                        .include_y(0.0)
-                        .include_y(100.0)
-                        .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
+                        .width(800.)
+                        .view_aspect(3.0) // 3.0에서 8.0으로 증가
+                        // .min_size(Vec2::from((10000.,1000.)))
+                        .auto_bounds(Vec2b::new(false, true)) // [x축 자동조절, y축 자동조절]
+                        .include_x(2000.0) // x축 끝점
+                        .show_axes(false) // y축 숨기기
+                        .include_x(self.measurements.lock().unwrap().values.len() as f64 + 1.); // x축 시작점 (더 큰 값을 먼저)
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
-                            let volumes = measurements.volumes();
-
-                            let bars: Vec<Bar> = volumes
+                            // `volume` 데이터 가져오기 (line_points에서 이미 가져옴)
+                            let line_points: Vec<[f64; 2]> = measurements
+                                .values
                                 .iter()
                                 .enumerate()
-                                .map(|(i, &volume)| {
-                                    // 캔들 데이터로부터 상승/하락 여부 확인
-                                    let color = if let Some(candle) =
-                                        measurements.values.get(&(i as u64))
-                                    {
-                                        if candle.close <= candle.open {
-                                            egui::Color32::from_rgb(235, 52, 52)
-                                        // 상승 시 빨간색
-                                        } else {
-                                            egui::Color32::from_rgb(71, 135, 231)
-                                            // 하락 시 파란색
-                                        }
-                                    } else {
-                                        egui::Color32::GRAY
-                                    };
-
-                                    Bar::new(i as f64, volume).width(0.10).fill(color)
-                                })
+                                .map(|(i, (_, candle))| [i as f64, candle.volume]) // volume 필드를 사용
                                 .collect();
 
-                            plot_ui.bar_chart(egui_plot::BarChart::new(bars));
-                        }
-                        if let Ok(measurements) = self.measurements.lock() {
-                            let volumes = measurements.volumes();
-                            let bars: Vec<egui_plot::Bar> = volumes
-                                .iter()
-                                .enumerate()
-                                .map(|(i, &volume)| {
-                                    // 캔들 데이터로부터 상승/하락 여부 확인
-                                    let color = if let Some(candle) =
-                                        measurements.values.get(&(i as u64))
-                                    {
-                                        if candle.close <= candle.open {
-                                            egui::Color32::from_rgb(235, 52, 52)
-                                        // 상승 시 빨간색
-                                        } else {
-                                            egui::Color32::from_rgb(71, 135, 231)
-                                            // 하락 시 파란색
-                                        }
-                                    } else {
-                                        egui::Color32::GRAY
-                                    };
-
-                                    egui_plot::Bar::new(i as f64, volume)
-                                        .width(1.0) // 너비를 증가시켜 시각적으로 더 잘 보이도록 설정
-                                        .fill(color)
-                                })
-                                .collect();
-
-                            plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                            // Bars 벡터 생성
+                            let bars: Vec<Bar> = measurements
+                            .values
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (_, candle))| {
+                                let color = if candle.close <= candle.open {
+                                    // 하락 (빨간색) - 더 선명하게
+                                    egui::Color32::from_rgba_premultiplied(255, 59, 59, 255)  // 빨간색 강화
+                                    // 또는
+                                    // egui::Color32::from_rgb(255, 38, 38)  // 더 진한 빨간색
+                                } else {
+                                    // 상승 (파란색) - 더 선명하게
+                                    egui::Color32::from_rgba_premultiplied(66, 133, 255, 255)  // 파란색 강화
+                                    // 또는
+                                    // egui::Color32::from_rgb(66, 133, 255)  // 더 진한 파란색
+                                };
+                
+                                Bar::new(i as f64, candle.volume)
+                                    .width(0.10)
+                                    .fill(color)
+                                    .stroke(egui::Stroke::new(1.0, color))  // 테두리 추가하여 더 선명하게
+                            })
+                            .collect();
+                
+                        plot_ui.bar_chart(egui_plot::BarChart::new(bars));
                         }
                     });
                 });
