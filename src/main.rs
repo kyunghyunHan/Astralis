@@ -2,11 +2,11 @@
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 use eframe::egui::{self, Id, RichText, Vec2b};
 use egui_plot::{Bar, BoxElem, BoxSpread, PlotPoint, PlotPoints};
+use std::collections::BTreeMap;
 use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-
 use stocki::types::{ChartType, MAPeriod, MeasurementWindow, StockData, TimeFrame};
 
 fn main() -> eframe::Result {
@@ -109,6 +109,54 @@ impl Stocki {
         }
 
         ma_values
+    }
+    fn calculate_rsi(&self, prices: &BTreeMap<u64, StockData>) -> Vec<f64> {
+        let period = 14; // RSI 기본 기간
+        if prices.len() < period + 1 {
+            return vec![];
+        }
+
+        // BTreeMap의 값들을 벡터로 변환
+        let price_vec: Vec<&StockData> = prices.values().collect();
+
+        let mut rsi_values = Vec::new();
+        let mut gains = Vec::new();
+        let mut losses = Vec::new();
+
+        // 첫 번째 변화량 계산
+        for i in 1..price_vec.len() {
+            let price_change = price_vec[i].close - price_vec[i - 1].close;
+            if price_change >= 0.0 {
+                gains.push(price_change);
+                losses.push(0.0);
+            } else {
+                gains.push(0.0);
+                losses.push(-price_change);
+            }
+        }
+
+        // 초기 평균 계산
+        let mut avg_gain = gains[..period].iter().sum::<f64>() / period as f64;
+        let mut avg_loss = losses[..period].iter().sum::<f64>() / period as f64;
+
+        // 첫 RSI 계산
+        let mut rsi = 100.0 - (100.0 / (1.0 + avg_gain / avg_loss));
+        rsi_values.push(rsi);
+
+        // 나머지 기간에 대한 RSI 계산
+        for i in period..gains.len() {
+            avg_gain = (avg_gain * (period - 1) as f64 + gains[i]) / period as f64;
+            avg_loss = (avg_loss * (period - 1) as f64 + losses[i]) / period as f64;
+
+            if avg_loss == 0.0 {
+                rsi = 100.0;
+            } else {
+                rsi = 100.0 - (100.0 / (1.0 + avg_gain / avg_loss));
+            }
+            rsi_values.push(rsi);
+        }
+
+        rsi_values
     }
 
     // 매매 신호 생성 함수도 PlotPoint를 사용하도록 수정
@@ -286,7 +334,7 @@ impl eframe::App for Stocki {
                     ui.selectable_value(&mut self.chart_type, ChartType::Candle, "Candle");
                     ui.selectable_value(&mut self.chart_type, ChartType::Line, "Line");
                     ui.add_space(32.0);
-             
+
                     let button_text = RichText::new("Moving Averages").size(14.0).strong();
                     ui.menu_button(button_text, |ui| {
                         // 단순한 아래 화살표 사용
@@ -470,6 +518,61 @@ impl eframe::App for Stocki {
                             plot_ui.bar_chart(egui_plot::BarChart::new(bars));
                         }
                     });
+                });
+
+                // RSI Chart
+                ui.group(|ui| {
+                    let lens = self.measurements.lock().unwrap().values.len() as f64;
+        
+                    let plot = egui_plot::Plot::new("rsi_chart")
+                        .height(100.0)
+                        .width(800.)
+                        .view_aspect(5.0)
+                        .auto_bounds(Vec2b::new(false, false))
+                        .show_axes(true)
+                        .include_x(lens - 99.) // x축 끝점
+                        .include_x(lens + 1.)
+                        .include_y(0)
+                        .include_y(100);
+        
+          // RSI Chart 부분만 수정
+plot.show(ui, |plot_ui| {
+    if let Ok(measurements) = self.measurements.lock() {
+        // RSI 계산
+        let rsi_values = self.calculate_rsi(&measurements.values);
+        
+        // RSI 선 그리기
+        let line_points: Vec<[f64; 2]> = rsi_values
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| [i as f64 + 14.0, value])
+            .collect();
+
+        // RSI 선
+        plot_ui.line(egui_plot::Line::new(egui_plot::PlotPoints::new(line_points))
+            .color(egui::Color32::from_rgb(255, 165, 0))
+            .width(1.5));
+
+        // 기준선들
+        // 과매수선 (70)
+        plot_ui.hline(egui_plot::HLine::new(70.0)
+            .color(egui::Color32::from_rgb(255, 0, 0))
+            .width(1.0)
+            .style(egui_plot::LineStyle::Dashed { length: 10.0 }));
+
+        // 과매도선 (30)
+        plot_ui.hline(egui_plot::HLine::new(30.0)
+            .color(egui::Color32::from_rgb(0, 255, 0))
+            .width(1.0)
+            .style(egui_plot::LineStyle::Dashed { length: 10.0 }));
+        
+        // 중간선 (50)
+        plot_ui.hline(egui_plot::HLine::new(50.0)
+            .color(egui::Color32::GRAY)
+            .width(1.0)
+            .style(egui_plot::LineStyle::Dashed { length: 10.0 }));
+    }
+});
                 });
             });
         });
