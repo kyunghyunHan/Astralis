@@ -17,7 +17,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 900.0]),
         ..Default::default()
     };
-    let app = Stocki::default(1000);
+    let app: Stocki = Stocki::default(1000);
 
     eframe::run_native(
         "My egui App",
@@ -33,11 +33,7 @@ fn main() -> eframe::Result {
 pub type Measurement = egui_plot::PlotPoint;
 
 struct Stocki {
-    include_y: Vec<f64>,
     measurements: Arc<Mutex<MeasurementWindow>>,
-    last_update: Instant, // Add this field to track the last update time
-    current_value: f64,
-    target_value: f64,
     selected_stock: Arc<Mutex<String>>, // 선택된 주식
     stocks: Vec<String>,                // 사용 가능한 주식 목록
     chart_type: ChartType,
@@ -80,10 +76,6 @@ impl Stocki {
                 look_behind,
                 new_data,
             ))),
-            include_y: Vec::new(),
-            last_update: Instant::now(),
-            current_value: 0.0,
-            target_value: rand::random::<f64>() * 2.0 - 1.0,
             selected_stock,
             stocks,
             chart_type: ChartType::Line,
@@ -110,22 +102,23 @@ impl Stocki {
 
         ma_values
     }
-    fn calculate_rsi(&self, prices: &BTreeMap<u64, StockData>) -> Vec<f64> {
-        let period = 14; // RSI 기본 기간
+    fn calculate_rsi(&self, prices: &BTreeMap<u64, StockData>) -> Vec<(f64, f64)> {
+        // (timestamp, rsi_value)
+        let period = 14;
         if prices.len() < period + 1 {
             return vec![];
         }
 
-        // BTreeMap의 값들을 벡터로 변환
-        let price_vec: Vec<&StockData> = prices.values().collect();
+        // timestamps와 가격 데이터를 벡터로 변환
+        let price_data: Vec<(u64, &StockData)> = prices.iter().map(|(&k, v)| (k, v)).collect();
 
         let mut rsi_values = Vec::new();
         let mut gains = Vec::new();
         let mut losses = Vec::new();
 
         // 첫 번째 변화량 계산
-        for i in 1..price_vec.len() {
-            let price_change = price_vec[i].close - price_vec[i - 1].close;
+        for i in 1..price_data.len() {
+            let price_change = price_data[i].1.close - price_data[i - 1].1.close;
             if price_change >= 0.0 {
                 gains.push(price_change);
                 losses.push(0.0);
@@ -139,9 +132,10 @@ impl Stocki {
         let mut avg_gain = gains[..period].iter().sum::<f64>() / period as f64;
         let mut avg_loss = losses[..period].iter().sum::<f64>() / period as f64;
 
-        // 첫 RSI 계산
+        // 첫 RSI 계산 (period + 1 인덱스의 타임스탬프 사용)
         let mut rsi = 100.0 - (100.0 / (1.0 + avg_gain / avg_loss));
-        rsi_values.push(rsi);
+        let normalized_timestamp = (price_data[period].0 as f64); // 일 단위 정규화
+        rsi_values.push((normalized_timestamp, rsi));
 
         // 나머지 기간에 대한 RSI 계산
         for i in period..gains.len() {
@@ -153,12 +147,14 @@ impl Stocki {
             } else {
                 rsi = 100.0 - (100.0 / (1.0 + avg_gain / avg_loss));
             }
-            rsi_values.push(rsi);
+
+            // 해당 시점의 타임스탬프를 정규화하여 저장
+            let normalized_timestamp = (price_data[i + 1].0 as f64); // 일 단위 정규화
+            rsi_values.push((normalized_timestamp, rsi));
         }
 
         rsi_values
     }
-
     // 매매 신호 생성 함수도 PlotPoint를 사용하도록 수정
     fn generate_signals(&self, short_ma: &[PlotPoint], long_ma: &[PlotPoint]) -> Vec<PlotPoint> {
         let mut signals = Vec::new();
@@ -182,15 +178,15 @@ impl Stocki {
 
         signals
     }
-    fn update_target(&mut self) {
-        self.target_value = rand::random::<f64>() * 2.0 - 1.0; // New random target between -1 and 1
-    }
+    // fn update_target(&mut self) {
+    //     self.target_value = rand::random::<f64>() * 2.0 - 1.0; // New random target between -1 and 1
+    // }
 
-    fn interpolate_value(&mut self) {
-        // Smoothly interpolate current_value towards target_value
-        let difference = self.target_value - self.current_value;
-        self.current_value += difference * 0.1; // Adjust this factor to control movement speed
-    }
+    // fn interpolate_value(&mut self) {
+    //     // Smoothly interpolate current_value towards target_value
+    //     let difference = self.target_value - self.current_value;
+    //     self.current_value += difference * 0.1; // Adjust this factor to control movement speed
+    // }
     fn update_stock_data(&mut self, stock_name: &str) {
         let stock_type = "day".to_string();
         let new_data = StockData::get_data(stock_name, &stock_type);
@@ -367,15 +363,31 @@ impl eframe::App for Stocki {
 
                 // Main Chart
                 ui.group(|ui| {
-                    let lens = self.measurements.lock().unwrap().values.len() as f64;
+                    let first_value = *self
+                        .measurements
+                        .lock()
+                        .unwrap()
+                        .values
+                        .first_key_value()
+                        .unwrap()
+                        .0 as f64;
+                    let last_value = *self
+                        .measurements
+                        .lock()
+                        .unwrap()
+                        .values
+                        .last_key_value()
+                        .unwrap()
+                        .0 as f64;
+
                     let plot = egui_plot::Plot::new("stock_chart")
                         .height(500.0)
                         .width(800.)
-                        .view_aspect(5.0) // 3.0에서 8.0으로 증가
+                        .view_aspect(10.0) // 3.0에서 8.0으로 증가
                         .show_axes(true) // y축 숨기기
                         .auto_bounds(Vec2b::new(false, false)) // [x축 자동조절, y축 자동조절]
-                        .include_x(lens - 100.) // x축 끝점
-                        .include_x(lens + 1.)
+                        .include_x(first_value) // x축 끝점f
+                        .include_x(last_value)
                         .include_y(0)
                         .include_y(250);
 
@@ -386,8 +398,7 @@ impl eframe::App for Stocki {
                                     let line_points: Vec<[f64; 2]> = measurements
                                         .values
                                         .iter()
-                                        .enumerate()
-                                        .map(|(i, (_, candle))| [i as f64, candle.close])
+                                        .map(|(i, candle)| [*i as f64, candle.close])
                                         .collect();
                                     // println!("{:?}", line_points[0]);
                                     plot_ui.line(
@@ -403,8 +414,8 @@ impl eframe::App for Stocki {
                                     let candles: Vec<BoxElem> = measurements
                                         .values
                                         .iter()
-                                        .enumerate()
-                                        .map(|(i, (_, candle))| {
+                                        .map(|(i, candle)| {
+                                            println!("{}", i);
                                             let lower_whisker = candle.low; // 최저가
                                             let upper_whisker = candle.high; // 최고가
                                             let lower_bound = candle.open.min(candle.close); // 몸체 아래쪽 경계
@@ -427,11 +438,11 @@ impl eframe::App for Stocki {
                                                 // 하락봉 파란색
                                             };
 
-                                            BoxElem::new(i as f64, spread)
+                                            BoxElem::new(*i as f64, spread)
                                                 .fill(color)
                                                 .stroke(egui::Stroke::new(2.0, color))
                                                 .whisker_width(0.5) // 심지 너비
-                                                .box_width(0.6) // 몸통 너비
+                                                .box_width(0.8) // 몸통 너비
                                         })
                                         .collect();
 
@@ -470,48 +481,60 @@ impl eframe::App for Stocki {
                     });
                 });
 
-                // Volume Chart
                 ui.group(|ui| {
-                    let lens = self.measurements.lock().unwrap().values.len() as f64;
+                    let first_value = *self
+                        .measurements
+                        .lock()
+                        .unwrap()
+                        .values
+                        .first_key_value()
+                        .unwrap()
+                        .0 as f64; // 이미 정규화된 값 사용
+
+                    let last_value = *self
+                        .measurements
+                        .lock()
+                        .unwrap()
+                        .values
+                        .last_key_value()
+                        .unwrap()
+                        .0 as f64; // 이미 정규화된 값 사용
 
                     let plot = egui_plot::Plot::new("volume_chart")
-                        .height(100.0)
+                        .height(200.0)
                         .width(800.)
-                        .view_aspect(5.0) // 3.0에서 8.0으로 증가
-                        // .min_size(Vec2::from((10000.,1000.)))
-                        .auto_bounds(Vec2b::new(false, false)) // [x축 자동조절, y축 자동조절]
-                        .show_axes(false) // y축 숨기기
-                        .include_x(lens - 99.) // x축 끝점
-                        .include_x(lens + 1.)
+                        .view_aspect(5.0)
+                        .auto_bounds(Vec2b::new(false, false))
+                        .show_axes(false)
+                        .include_x(first_value)
+                        .include_x(last_value)
                         .include_y(0)
                         .include_y(500000000);
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
-                            // Bars 벡터 생성
                             let bars: Vec<Bar> = measurements
                                 .values
                                 .iter()
-                                .enumerate()
-                                .map(|(i, (_, candle))| {
+                                .map(|(i, candle)| {
                                     let color = if candle.close <= candle.open {
-                                        // 하락 (빨간색) - 더 선명하게
                                         egui::Color32::from_rgba_premultiplied(255, 59, 59, 255)
-                                    // 빨간색 강화
-                                    // 또는
-                                    // egui::Color32::from_rgb(255, 38, 38)  // 더 진한 빨간색
                                     } else {
-                                        // 상승 (파란색) - 더 선명하게
                                         egui::Color32::from_rgba_premultiplied(66, 133, 255, 255)
-                                        // 파란색 강화
-                                        // 또는
-                                        // egui::Color32::from_rgb(66, 133, 255)  // 더 진한 파란색
                                     };
 
-                                    Bar::new(i as f64, candle.volume)
-                                        .width(0.10)
+                                    let bar_width = if measurements.values.len() > 1 {
+                                        (last_value - first_value)
+                                            / measurements.values.len() as f64
+                                            * 0.8
+                                    } else {
+                                        0.8
+                                    };
+
+                                    Bar::new(*i as f64, candle.volume/10.) // 이미 정규화된 타임스탬프 사용
+                                        .width(bar_width)
                                         .fill(color)
-                                        .stroke(egui::Stroke::new(1.0, color)) // 테두리 추가하여 더 선명하게
+                                        .stroke(egui::Stroke::new(1.0, color))
                                 })
                                 .collect();
 
@@ -519,10 +542,24 @@ impl eframe::App for Stocki {
                         }
                     });
                 });
-
                 // RSI Chart
                 ui.group(|ui| {
-                    let lens = self.measurements.lock().unwrap().values.len() as f64;
+                    let first_value = *self
+                        .measurements
+                        .lock()
+                        .unwrap()
+                        .values
+                        .first_key_value()
+                        .unwrap()
+                        .0 as f64;
+                    let last_value = *self
+                        .measurements
+                        .lock()
+                        .unwrap()
+                        .values
+                        .last_key_value()
+                        .unwrap()
+                        .0 as f64;
 
                     let plot = egui_plot::Plot::new("rsi_chart")
                         .height(100.0)
@@ -530,8 +567,8 @@ impl eframe::App for Stocki {
                         .view_aspect(5.0)
                         .auto_bounds(Vec2b::new(false, false))
                         .show_axes(true)
-                        .include_x(lens - 99.) // x축 끝점
-                        .include_x(lens + 1.)
+                        .include_x(first_value) // x축 끝점
+                        .include_x(last_value)
                         .include_y(0)
                         .include_y(100)
                         .allow_boxed_zoom(false)
@@ -542,25 +579,22 @@ impl eframe::App for Stocki {
                     // RSI Chart 부분만 수정
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
-                            // RSI 계산
+                            // RSI 계산 (이제 타임스탬프와 RSI 값 쌍의 벡터를 반환)
                             let rsi_values = self.calculate_rsi(&measurements.values);
 
-                            // RSI 선 그리기
+                            // RSI 선 그리기 - 정규화된 타임스탬프 사용
                             let line_points: Vec<[f64; 2]> = rsi_values
                                 .iter()
-                                .enumerate()
-                                .map(|(i, &value)| [i as f64 + 14.0, value])
+                                .map(|(timestamp, value)| [*timestamp, *value])
                                 .collect();
 
-                            // RSI 선
                             plot_ui.line(
                                 egui_plot::Line::new(egui_plot::PlotPoints::new(line_points))
                                     .color(egui::Color32::from_rgb(255, 165, 0))
                                     .width(1.5),
                             );
 
-                            // 기준선들
-                            // 과매수선 (70)
+                            // 기준선들 (변경 없음)
                             plot_ui.hline(
                                 egui_plot::HLine::new(70.0)
                                     .color(egui::Color32::from_rgb(255, 0, 0))
@@ -568,7 +602,6 @@ impl eframe::App for Stocki {
                                     .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
                             );
 
-                            // 과매도선 (30)
                             plot_ui.hline(
                                 egui_plot::HLine::new(30.0)
                                     .color(egui::Color32::from_rgb(0, 255, 0))
@@ -576,7 +609,6 @@ impl eframe::App for Stocki {
                                     .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
                             );
 
-                            // 중간선 (50)
                             plot_ui.hline(
                                 egui_plot::HLine::new(50.0)
                                     .color(egui::Color32::GRAY)
