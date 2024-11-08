@@ -38,8 +38,10 @@ pub enum TimeFrame {
     Month,
     Year,
 }
+
 // 이동평균선 기간을 위한 enum 추가
-#[derive(PartialEq, Clone, Debug)]
+// MAPeriod 열거형에 필요한 derive 매크로 추가
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum MAPeriod {
     MA5,
     MA10,

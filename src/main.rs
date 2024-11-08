@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
-use eframe::egui::{self, Vec2b};
+use eframe::egui::{self, Id, RichText, Vec2b};
 use egui_plot::{Bar, BoxElem, BoxSpread, PlotPoint, PlotPoints};
 use std::{
     sync::{Arc, Mutex},
@@ -42,9 +42,8 @@ struct Stocki {
     stocks: Vec<String>,                // 사용 가능한 주식 목록
     chart_type: ChartType,
     time_frame: TimeFrame,
-    show_ma: bool,
-    pub short_ma: MAPeriod, // 변경
-    pub long_ma: MAPeriod,  // 변경
+    // show_ma: bool,
+    ma_states: std::collections::HashMap<MAPeriod, bool>, // 각 MA의 활성화 상태만 유지
 }
 
 impl Stocki {
@@ -69,6 +68,13 @@ impl Stocki {
             "TSLA".to_string(),
             "NVDA".to_string(),
         ];
+        let mut ma_states = std::collections::HashMap::new();
+
+        ma_states.insert(MAPeriod::MA5, false);
+        ma_states.insert(MAPeriod::MA10, false);
+        ma_states.insert(MAPeriod::MA20, false);
+        ma_states.insert(MAPeriod::MA60, false);
+        ma_states.insert(MAPeriod::MA224, false);
         Self {
             measurements: Arc::new(Mutex::new(MeasurementWindow::new_with_look_behind(
                 look_behind,
@@ -82,9 +88,8 @@ impl Stocki {
             stocks,
             chart_type: ChartType::Line,
             time_frame: TimeFrame::Day,
-            show_ma: false,
-            short_ma: MAPeriod::MA5, // 기본값
-            long_ma: MAPeriod::MA10, // 기본값
+            // show_ma: false,
+            ma_states,
         }
     }
     fn calculate_moving_average(&self, prices: &[PlotPoint], period: usize) -> Vec<PlotPoint> {
@@ -94,15 +99,11 @@ impl Stocki {
             return ma_values;
         }
 
-        // 각 시점에 대해 이동평균 계산
         for i in (period - 1)..prices.len() {
-            // 현재 기간의 데이터만 사용하여 평균 계산
             let window_start = i + 1 - period;
             let window_end = i + 1;
             let sum: f64 = prices[window_start..window_end].iter().map(|p| p.y).sum();
             let ma = sum / period as f64;
-
-            // x 값은 원본 데이터의 x 값을 사용
             let x = prices[i].x;
             ma_values.push(PlotPoint::new(x, ma));
         }
@@ -285,54 +286,31 @@ impl eframe::App for Stocki {
                     ui.selectable_value(&mut self.chart_type, ChartType::Candle, "Candle");
                     ui.selectable_value(&mut self.chart_type, ChartType::Line, "Line");
                     ui.add_space(32.0);
-                    ui.checkbox(&mut self.show_ma, "Moving Averages");
-                    if self.show_ma {
-                        ui.menu_button(format!("{}", self.short_ma.name()), |ui| {
-                            if ui.button("5MA").clicked() {
-                                self.short_ma = MAPeriod::MA5;
-                                ui.close_menu();
-                            }
-                            if ui.button("10MA").clicked() {
-                                self.short_ma = MAPeriod::MA10;
-                                ui.close_menu();
-                            }
-                            if ui.button("20MA").clicked() {
-                                self.short_ma = MAPeriod::MA20;
-                                ui.close_menu();
-                            }
-                            if ui.button("60MA").clicked() {
-                                self.short_ma = MAPeriod::MA60;
-                                ui.close_menu();
-                            }
-                            if ui.button("224MA").clicked() {
-                                self.short_ma = MAPeriod::MA224;
-                                ui.close_menu();
+             
+                    let button_text = RichText::new("Moving Averages").size(14.0).strong();
+                    ui.menu_button(button_text, |ui| {
+                        // 단순한 아래 화살표 사용
+                        ui.set_min_width(150.0);
+
+                        ui.horizontal(|ui| {
+                            for period in &[MAPeriod::MA5, MAPeriod::MA10, MAPeriod::MA20] {
+                                let mut active = *self.ma_states.get(period).unwrap_or(&false);
+                                if ui.checkbox(&mut active, period.name()).clicked() {
+                                    self.ma_states.insert(*period, active);
+                                }
                             }
                         });
 
-                        ui.menu_button(format!("{}", self.long_ma.name()), |ui| {
-                            if ui.button("5MA").clicked() {
-                                self.long_ma = MAPeriod::MA5;
-                                ui.close_menu();
-                            }
-                            if ui.button("10MA").clicked() {
-                                self.long_ma = MAPeriod::MA10;
-                                ui.close_menu();
-                            }
-                            if ui.button("20MA").clicked() {
-                                self.long_ma = MAPeriod::MA20;
-                                ui.close_menu();
-                            }
-                            if ui.button("60MA").clicked() {
-                                self.long_ma = MAPeriod::MA60;
-                                ui.close_menu();
-                            }
-                            if ui.button("224MA").clicked() {
-                                self.long_ma = MAPeriod::MA224;
-                                ui.close_menu();
+                        ui.horizontal(|ui| {
+                            for period in &[MAPeriod::MA60, MAPeriod::MA224] {
+                                let mut active = *self.ma_states.get(period).unwrap_or(&false);
+                                if ui.checkbox(&mut active, period.name()).clicked() {
+                                    self.ma_states.insert(*period, active);
+                                }
                             }
                         });
-                    }
+                    });
+
                     ui.selectable_value(&mut self.time_frame, TimeFrame::Day, "1D");
                     ui.selectable_value(&mut self.time_frame, TimeFrame::Week, "1W");
                     ui.selectable_value(&mut self.time_frame, TimeFrame::Month, "1M");
@@ -341,17 +319,17 @@ impl eframe::App for Stocki {
 
                 // Main Chart
                 ui.group(|ui| {
+                    let lens = self.measurements.lock().unwrap().values.len() as f64;
                     let plot = egui_plot::Plot::new("stock_chart")
                         .height(500.0)
                         .width(800.)
-                        .view_aspect(3.0) // 3.0에서 8.0으로 증가
-                        .show_axes(false) // y축 숨기기
-                        .auto_bounds(Vec2b::new(false, true)) // [x축 자동조절, y축 자동조절]
-                        .include_x(2000.0) // x축 끝점
-                        .include_x(self.measurements.lock().unwrap().values.len() as f64 + 1.); // x축 시작점 (더 큰 값을 먼저)
-                                                                                                // .include_y(0.0)
-                                                                                                // .include_y(100.0)
-                                                                                                // .label_formatter(|name, value| format!("{}: ${:.2}", name, value.y));
+                        .view_aspect(5.0) // 3.0에서 8.0으로 증가
+                        .show_axes(true) // y축 숨기기
+                        .auto_bounds(Vec2b::new(false, false)) // [x축 자동조절, y축 자동조절]
+                        .include_x(lens - 100.) // x축 끝점
+                        .include_x(lens + 1.)
+                        .include_y(0)
+                        .include_y(250);
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
@@ -413,82 +391,83 @@ impl eframe::App for Stocki {
                                     plot_ui.box_plot(box_plot);
                                 }
                             }
+                            ctx.request_repaint();
 
-                            if self.show_ma {
-                                // 단기 이동평균선
-                                if let PlotPoints::Owned(points) = measurements.plot_values() {
-                                    let short_ma = self
-                                        .calculate_moving_average(&points, self.short_ma.value());
-                                    plot_ui.line(
-                                        egui_plot::Line::new(PlotPoints::Owned(short_ma.clone()))
-                                            .color(egui::Color32::from_rgb(255, 0, 0))
-                                            .width(1.5)
-                                            .name(self.short_ma.name()),
-                                    );
+                            // if self.show_ma {
+                            if let PlotPoints::Owned(points) = measurements.plot_values() {
+                                // 활성화된 각 이동평균선 표시
+                                for (&period, &is_active) in &self.ma_states {
+                                    if is_active {
+                                        let ma =
+                                            self.calculate_moving_average(&points, period.value());
+                                        let color = match period {
+                                            MAPeriod::MA5 => egui::Color32::from_rgb(255, 0, 0), // 빨강
+                                            MAPeriod::MA10 => egui::Color32::from_rgb(0, 255, 0), // 초록
+                                            MAPeriod::MA20 => egui::Color32::from_rgb(0, 0, 255), // 파랑
+                                            MAPeriod::MA60 => egui::Color32::from_rgb(255, 165, 0), // 주황
+                                            MAPeriod::MA224 => egui::Color32::from_rgb(128, 0, 128), // 보라
+                                        };
 
-                                    // 장기 이동평균선
-                                    let long_ma = self
-                                        .calculate_moving_average(&points, self.long_ma.value());
-                                    plot_ui.line(
-                                        egui_plot::Line::new(PlotPoints::Owned(long_ma.clone()))
-                                            .color(egui::Color32::from_rgb(0, 0, 255))
-                                            .width(1.5)
-                                            .name(self.long_ma.name()),
-                                    )
+                                        plot_ui.line(
+                                            egui_plot::Line::new(PlotPoints::Owned(ma))
+                                                .color(color)
+                                                .width(1.5)
+                                                .name(period.name()),
+                                        );
+                                    }
                                 }
                             }
                         }
+                        // }
                     });
                 });
 
                 // Volume Chart
                 ui.group(|ui| {
+                    let lens = self.measurements.lock().unwrap().values.len() as f64;
+
                     let plot = egui_plot::Plot::new("volume_chart")
-                        .height(200.0)
+                        .height(100.0)
                         .width(800.)
-                        .view_aspect(3.0) // 3.0에서 8.0으로 증가
+                        .view_aspect(5.0) // 3.0에서 8.0으로 증가
                         // .min_size(Vec2::from((10000.,1000.)))
-                        .auto_bounds(Vec2b::new(false, true)) // [x축 자동조절, y축 자동조절]
-                        .include_x(2000.0) // x축 끝점
+                        .auto_bounds(Vec2b::new(false, false)) // [x축 자동조절, y축 자동조절]
                         .show_axes(false) // y축 숨기기
-                        .include_x(self.measurements.lock().unwrap().values.len() as f64 + 1.); // x축 시작점 (더 큰 값을 먼저)
+                        .include_x(lens - 99.) // x축 끝점
+                        .include_x(lens + 1.)
+                        .include_y(0)
+                        .include_y(500000000);
 
                     plot.show(ui, |plot_ui| {
                         if let Ok(measurements) = self.measurements.lock() {
-                            // `volume` 데이터 가져오기 (line_points에서 이미 가져옴)
-                            let line_points: Vec<[f64; 2]> = measurements
+                            // Bars 벡터 생성
+                            let bars: Vec<Bar> = measurements
                                 .values
                                 .iter()
                                 .enumerate()
-                                .map(|(i, (_, candle))| [i as f64, candle.volume]) // volume 필드를 사용
-                                .collect();
-
-                            // Bars 벡터 생성
-                            let bars: Vec<Bar> = measurements
-                            .values
-                            .iter()
-                            .enumerate()
-                            .map(|(i, (_, candle))| {
-                                let color = if candle.close <= candle.open {
-                                    // 하락 (빨간색) - 더 선명하게
-                                    egui::Color32::from_rgba_premultiplied(255, 59, 59, 255)  // 빨간색 강화
+                                .map(|(i, (_, candle))| {
+                                    let color = if candle.close <= candle.open {
+                                        // 하락 (빨간색) - 더 선명하게
+                                        egui::Color32::from_rgba_premultiplied(255, 59, 59, 255)
+                                    // 빨간색 강화
                                     // 또는
                                     // egui::Color32::from_rgb(255, 38, 38)  // 더 진한 빨간색
-                                } else {
-                                    // 상승 (파란색) - 더 선명하게
-                                    egui::Color32::from_rgba_premultiplied(66, 133, 255, 255)  // 파란색 강화
-                                    // 또는
-                                    // egui::Color32::from_rgb(66, 133, 255)  // 더 진한 파란색
-                                };
-                
-                                Bar::new(i as f64, candle.volume)
-                                    .width(0.10)
-                                    .fill(color)
-                                    .stroke(egui::Stroke::new(1.0, color))  // 테두리 추가하여 더 선명하게
-                            })
-                            .collect();
-                
-                        plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                                    } else {
+                                        // 상승 (파란색) - 더 선명하게
+                                        egui::Color32::from_rgba_premultiplied(66, 133, 255, 255)
+                                        // 파란색 강화
+                                        // 또는
+                                        // egui::Color32::from_rgb(66, 133, 255)  // 더 진한 파란색
+                                    };
+
+                                    Bar::new(i as f64, candle.volume)
+                                        .width(0.10)
+                                        .fill(color)
+                                        .stroke(egui::Stroke::new(1.0, color)) // 테두리 추가하여 더 선명하게
+                                })
+                                .collect();
+
+                            plot_ui.bar_chart(egui_plot::BarChart::new(bars));
                         }
                     });
                 });
