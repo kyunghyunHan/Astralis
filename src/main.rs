@@ -523,7 +523,7 @@ impl eframe::App for Stocki {
                 // RSI Chart
                 ui.group(|ui| {
                     let lens = self.measurements.lock().unwrap().values.len() as f64;
-        
+
                     let plot = egui_plot::Plot::new("rsi_chart")
                         .height(100.0)
                         .width(800.)
@@ -533,46 +533,58 @@ impl eframe::App for Stocki {
                         .include_x(lens - 99.) // x축 끝점
                         .include_x(lens + 1.)
                         .include_y(0)
-                        .include_y(100);
-        
-          // RSI Chart 부분만 수정
-plot.show(ui, |plot_ui| {
-    if let Ok(measurements) = self.measurements.lock() {
-        // RSI 계산
-        let rsi_values = self.calculate_rsi(&measurements.values);
-        
-        // RSI 선 그리기
-        let line_points: Vec<[f64; 2]> = rsi_values
-            .iter()
-            .enumerate()
-            .map(|(i, &value)| [i as f64 + 14.0, value])
-            .collect();
+                        .include_y(100)
+                        .allow_boxed_zoom(false)
+                        .allow_zoom(Vec2b::new(false, false))
+                        .allow_scroll(Vec2b::new(true, false))
+                        .allow_drag(Vec2b::new(false, false));
 
-        // RSI 선
-        plot_ui.line(egui_plot::Line::new(egui_plot::PlotPoints::new(line_points))
-            .color(egui::Color32::from_rgb(255, 165, 0))
-            .width(1.5));
+                    // RSI Chart 부분만 수정
+                    plot.show(ui, |plot_ui| {
+                        if let Ok(measurements) = self.measurements.lock() {
+                            // RSI 계산
+                            let rsi_values = self.calculate_rsi(&measurements.values);
 
-        // 기준선들
-        // 과매수선 (70)
-        plot_ui.hline(egui_plot::HLine::new(70.0)
-            .color(egui::Color32::from_rgb(255, 0, 0))
-            .width(1.0)
-            .style(egui_plot::LineStyle::Dashed { length: 10.0 }));
+                            // RSI 선 그리기
+                            let line_points: Vec<[f64; 2]> = rsi_values
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &value)| [i as f64 + 14.0, value])
+                                .collect();
 
-        // 과매도선 (30)
-        plot_ui.hline(egui_plot::HLine::new(30.0)
-            .color(egui::Color32::from_rgb(0, 255, 0))
-            .width(1.0)
-            .style(egui_plot::LineStyle::Dashed { length: 10.0 }));
-        
-        // 중간선 (50)
-        plot_ui.hline(egui_plot::HLine::new(50.0)
-            .color(egui::Color32::GRAY)
-            .width(1.0)
-            .style(egui_plot::LineStyle::Dashed { length: 10.0 }));
-    }
-});
+                            // RSI 선
+                            plot_ui.line(
+                                egui_plot::Line::new(egui_plot::PlotPoints::new(line_points))
+                                    .color(egui::Color32::from_rgb(255, 165, 0))
+                                    .width(1.5),
+                            );
+
+                            // 기준선들
+                            // 과매수선 (70)
+                            plot_ui.hline(
+                                egui_plot::HLine::new(70.0)
+                                    .color(egui::Color32::from_rgb(255, 0, 0))
+                                    .width(1.0)
+                                    .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
+                            );
+
+                            // 과매도선 (30)
+                            plot_ui.hline(
+                                egui_plot::HLine::new(30.0)
+                                    .color(egui::Color32::from_rgb(0, 255, 0))
+                                    .width(1.0)
+                                    .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
+                            );
+
+                            // 중간선 (50)
+                            plot_ui.hline(
+                                egui_plot::HLine::new(50.0)
+                                    .color(egui::Color32::GRAY)
+                                    .width(1.0)
+                                    .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
+                            );
+                        }
+                    });
                 });
             });
         });
