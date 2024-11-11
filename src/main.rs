@@ -38,43 +38,43 @@ pub type Measurement = egui_plot::PlotPoint;
 
 struct Stocki {
     measurements: Arc<Mutex<MeasurementWindow>>,
-    selected_stock: Arc<Mutex<String>>, // 선택된 주식
-    stocks: Vec<String>,                // 사용 가능한 주식 목록
+    selected_stock: Arc<Mutex<String>>,
+    stocks: Vec<String>,
     chart_type: ChartType,
     time_frame: TimeFrame,
-    // show_ma: bool,
-    ma_states: std::collections::HashMap<MAPeriod, bool>, // 각 MA의 활성화 상태만 유지
+    ma_states: std::collections::HashMap<MAPeriod, bool>,
+    chart_id: Id, // 차트 ID 추가
 }
 
 impl Stocki {
     fn default(look_behind: usize) -> Self {
-        // let (tx, rx) = mpsc::channel();
-        let selected_type = Arc::new(Mutex::new("day".to_string())); // 초기 주식 이름
-
-        let selected_stock = Arc::new(Mutex::new("AAPL".to_string())); // 초기 주식 이름
-
+        let selected_stock = Arc::new(Mutex::new("005930.KS".to_string()));
         let selected_stock_clone = Arc::clone(&selected_stock);
-        let selected_type_clone = Arc::clone(&selected_type);
+        let stock_name = selected_stock_clone.lock().unwrap().clone();
+        let new_data = StockData::get_data(&stock_name, "1m");
 
-        let stock_name = selected_stock_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
-        let stock_type = selected_type_clone.lock().unwrap().clone(); // 선택된 주식 이름 가져오기
-        let new_data = StockData::get_data(&stock_name, &stock_type); // 주식 데이터를 가져옴
         let stocks = vec![
-            "AAPL".to_string(),
+            "005930.KS".to_string(),
             "GOOGL".to_string(),
             "MSFT".to_string(),
             "AMZN".to_string(),
             "META".to_string(),
             "TSLA".to_string(),
             "NVDA".to_string(),
+            "005930.KS".to_string()
         ];
-        let mut ma_states = std::collections::HashMap::new();
 
-        ma_states.insert(MAPeriod::MA5, false);
-        ma_states.insert(MAPeriod::MA10, false);
-        ma_states.insert(MAPeriod::MA20, false);
-        ma_states.insert(MAPeriod::MA60, false);
-        ma_states.insert(MAPeriod::MA224, false);
+        let mut ma_states = std::collections::HashMap::new();
+        for period in [
+            MAPeriod::MA5,
+            MAPeriod::MA10,
+            MAPeriod::MA20,
+            MAPeriod::MA60,
+            MAPeriod::MA224,
+        ] {
+            ma_states.insert(period, false);
+        }
+
         Self {
             measurements: Arc::new(Mutex::new(MeasurementWindow::new_with_look_behind(
                 look_behind,
@@ -84,8 +84,8 @@ impl Stocki {
             stocks,
             chart_type: ChartType::Line,
             time_frame: TimeFrame::Day,
-            // show_ma: false,
             ma_states,
+            chart_id: Id::new("stock_chart"), // 차트 ID 초기화
         }
     }
     fn calculate_moving_average(&self, prices: &[PlotPoint], period: usize) -> Vec<PlotPoint> {
@@ -183,11 +183,141 @@ impl Stocki {
         signals
     }
     fn update_stock_data(&mut self, stock_name: &str) {
-        let stock_type = "day".to_string();
-        let new_data = StockData::get_data(stock_name, &stock_type);
+        let stock_type = self.time_frame.to_string();
+        println!("Updating data for timeframe: {}", stock_type); // 디버그용
+        let new_data = StockData::get_data(stock_name, stock_type);
 
         if let Ok(mut measurements) = self.measurements.lock() {
+            // 기존 데이터를 완전히 새로운 데이터로 교체
             *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
+        }
+        self.chart_id = Id::new(format!("stock_chart_{}", rand::random::<u64>()));
+    }
+    fn draw_chart(&self, ui: &mut egui::Ui) {
+        if let Ok(measurements) = self.measurements.lock() {
+            if let (Some((&first_key, _)), Some((&last_key, _))) = (
+                measurements.values.first_key_value(),
+                measurements.values.last_key_value(),
+            ) {
+                let first_value = first_key as f64;
+                let last_value = last_key as f64;
+                println!("{}", measurements.values.len());
+
+                let plot = egui_plot::Plot::new(self.chart_id) // 동적 ID 사용
+                    .height(500.0)
+                    .width(800.)
+                    .view_aspect(10.0)
+                    .show_axes(true)
+                    .auto_bounds(Vec2b::new(false, false))
+                    .include_x(first_value)
+                    .include_x(last_value)
+                    .include_y(55000.0)
+                    .include_y(57000.0);
+
+                // 나머지 차트 그리기 코드...
+                plot.show(ui, |plot_ui| {
+                    // 기존 차트 그리기 로직...
+                    match self.chart_type {
+                        ChartType::Line => {
+                            let line_points: Vec<[f64; 2]> = measurements
+                                .values
+                                .iter()
+                                .map(|(i, candle)| [*i as f64, candle.close])
+                                .collect();
+
+                            plot_ui.line(
+                                egui_plot::Line::new(egui_plot::PlotPoints::new(line_points))
+                                    .color(egui::Color32::from_rgb(0, 150, 255))
+                                    .width(2.0),
+                            );
+                        }
+                        ChartType::Candle => {
+                            let candles: Vec<BoxElem> = measurements
+                                .values
+                                .iter()
+                                .map(|(i, candle)| {
+                                    let lower_whisker = candle.low;
+                                    let upper_whisker = candle.high;
+                                    let lower_bound = candle.open.min(candle.close);
+                                    let upper_bound = candle.open.max(candle.close);
+                                    let median = (candle.open + candle.close) / 2.0;
+
+                                    let spread = BoxSpread::new(
+                                        lower_whisker,
+                                        lower_bound,
+                                        median,
+                                        upper_bound,
+                                        upper_whisker,
+                                    );
+
+                                    let color = colors(candle.open, candle.close);
+
+                                    BoxElem::new(*i as f64, spread)
+                                        .fill(color)
+                                        .stroke(egui::Stroke::new(2.0, color))
+                                        .whisker_width(0.5)
+                                        .box_width(0.8)
+                                })
+                                .collect();
+
+                            let box_plot = egui_plot::BoxPlot::new(candles);
+                            plot_ui.box_plot(box_plot);
+                        }
+                    }
+
+                    if let PlotPoints::Owned(points) = measurements.plot_values() {
+                        for (&period, &is_active) in &self.ma_states {
+                            if is_active {
+                                let ma = self.calculate_moving_average(&points, period.value());
+                                let color = match period {
+                                    MAPeriod::MA5 => egui::Color32::from_rgb(255, 0, 0),
+                                    MAPeriod::MA10 => egui::Color32::from_rgb(0, 255, 0),
+                                    MAPeriod::MA20 => egui::Color32::from_rgb(0, 0, 255),
+                                    MAPeriod::MA60 => egui::Color32::from_rgb(255, 165, 0),
+                                    MAPeriod::MA224 => egui::Color32::from_rgb(128, 0, 128),
+                                };
+
+                                plot_ui.line(
+                                    egui_plot::Line::new(PlotPoints::Owned(ma))
+                                        .color(color)
+                                        .width(1.5)
+                                        .name(period.name()),
+                                );
+                            }
+                        }
+                    }
+                });
+                // plot.reset();
+
+                ui.group(|ui| {
+                    let plot = egui_plot::Plot::new("volume_chart")
+                        .height(100.0)
+                        .width(800.)
+                        .view_aspect(5.0)
+                        .auto_bounds(Vec2b::new(false, false))
+                        .show_axes(false)
+                        .include_x(first_value) // 같은 범위 사용
+                        .include_x(last_value) // 같은 범위 사용
+                        .include_y(0)
+                        .include_y(500000000);
+
+                    // ... volume 차트 코드 ...
+                });
+                ui.group(|ui| {
+                    let plot = egui_plot::Plot::new("rsi_chart")
+                        .height(100.0)
+                        .width(800.)
+                        .view_aspect(5.0)
+                        .auto_bounds(Vec2b::new(false, false))
+                        .show_axes(true)
+                        .include_x(first_value) // 같은 범위 사용
+                        .include_x(last_value) // 같은 범위 사용
+                        .include_y(0)
+                        .include_y(100);
+
+                    // ... RSI 차트 코드 ...
+                });
+            }
         }
     }
 }
@@ -199,8 +329,7 @@ impl eframe::App for Stocki {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 egui::menu::bar(ui, |ui| {
-                    let is_web = cfg!(target_arch = "wasm32");
-                    if !is_web {
+                    if !cfg!(target_arch = "wasm32") {
                         ui.menu_button("File", |ui| {
                             if ui.button("Quit").clicked() {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -217,7 +346,6 @@ impl eframe::App for Stocki {
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // 현재 시간 표시
                     ui.label(format!("Last Updated: {}", now.elapsed().as_secs()));
                 });
             });
@@ -305,10 +433,15 @@ impl eframe::App for Stocki {
                                 ui.label(format!(
                                     "Time Frame: {}",
                                     match self.time_frame {
-                                        TimeFrame::Day => "1 Day",
-                                        TimeFrame::Week => "1 Week",
-                                        TimeFrame::Month => "1 Month",
-                                        TimeFrame::Year => "1 Year",
+                                        TimeFrame::Minute1 => "1m",
+                                        TimeFrame::Minute2 => "2m",
+                                        TimeFrame::Minute5 => "5m",
+                                        TimeFrame::Minute15 => "15m",
+                                        TimeFrame::Minute30 => "30m",
+                                        TimeFrame::Hour1 => "60m",
+                                        TimeFrame::Day => "1d",
+                                        TimeFrame::Week => "1wk",
+                                        TimeFrame::Month => "1mo",
                                     }
                                 ));
                             }
@@ -327,7 +460,6 @@ impl eframe::App for Stocki {
 
                     let button_text = RichText::new("Moving Averages").size(14.0).strong();
                     ui.menu_button(button_text, |ui| {
-                        // 단순한 아래 화살표 사용
                         ui.set_min_width(150.0);
 
                         ui.horizontal(|ui| {
@@ -348,262 +480,190 @@ impl eframe::App for Stocki {
                             }
                         });
                     });
+                    // Time Frame Dropdown
+                    ui.add_space(32.0);
+                    let current_timeframe = self.time_frame.display_name();
+                    let mut selected_timeframe = None;
 
-                    ui.selectable_value(&mut self.time_frame, TimeFrame::Day, "1D");
-                    ui.selectable_value(&mut self.time_frame, TimeFrame::Week, "1W");
-                    ui.selectable_value(&mut self.time_frame, TimeFrame::Month, "1M");
-                    ui.selectable_value(&mut self.time_frame, TimeFrame::Year, "1Y");
+                    ui.menu_button(RichText::new(current_timeframe).size(14.0), |ui| {
+                        ui.set_min_width(100.0);
+                        let time_frames = [
+                            TimeFrame::Day,
+                            TimeFrame::Week,
+                            TimeFrame::Month,
+                            TimeFrame::Hour1,
+                            TimeFrame::Minute1,
+                            TimeFrame::Minute2,
+                            TimeFrame::Minute5,
+                            TimeFrame::Minute30,
+                            TimeFrame::Minute30,
+                        ];
+
+                        for &timeframe in &time_frames {
+                            if ui
+                                .selectable_label(
+                                    self.time_frame == timeframe,
+                                    timeframe.display_name(),
+                                )
+                                .clicked()
+                            {
+                                // 타임프레임이 변경되면 즉시 업데이트
+                                self.time_frame = timeframe;
+                                let stock_name = self.selected_stock.lock().unwrap().clone();
+                                self.update_stock_data(&stock_name);
+                                ctx.request_repaint(); // 강제로 화면 갱신
+                                ui.close_menu();
+                            }
+                        }
+                    });
+
+                    if let Some(new_timeframe) = selected_timeframe {
+                        if new_timeframe != self.time_frame {
+                            self.time_frame = new_timeframe;
+                            let stock_name = self.selected_stock.lock().unwrap().clone();
+                            self.update_stock_data(&stock_name);
+                        }
+                    }
                 });
-
+                self.draw_chart(ui);
                 // Main Chart
-                ui.group(|ui| {
-                    let first_value = *self
-                        .measurements
-                        .lock()
-                        .unwrap()
-                        .values
-                        .first_key_value()
-                        .unwrap()
-                        .0 as f64;
-                    let last_value = *self
-                        .measurements
-                        .lock()
-                        .unwrap()
-                        .values
-                        .last_key_value()
-                        .unwrap()
-                        .0 as f64;
-
-                    let plot = egui_plot::Plot::new("stock_chart")
-                        .height(500.0)
-                        .width(800.)
-                        .view_aspect(10.0) // 3.0에서 8.0으로 증가
-                        .show_axes(true) // y축 숨기기
-                        .auto_bounds(Vec2b::new(false, false)) // [x축 자동조절, y축 자동조절]
-                        .include_x(first_value) // x축 끝점f
-                        .include_x(last_value)
-                        .include_y(0)
-                        .include_y(250);
-
-                    plot.show(ui, |plot_ui| {
-                        if let Ok(measurements) = self.measurements.lock() {
-                            match self.chart_type {
-                                ChartType::Line => {
-                                    let line_points: Vec<[f64; 2]> = measurements
-                                        .values
-                                        .iter()
-                                        .map(|(i, candle)| [*i as f64, candle.close])
-                                        .collect();
-                                    // println!("{:?}", line_points[0]);
-                                    plot_ui.line(
-                                        egui_plot::Line::new(egui_plot::PlotPoints::new(
-                                            line_points,
-                                        ))
-                                        .color(egui::Color32::from_rgb(0, 150, 255))
-                                        .width(2.0),
-                                    );
-                                }
-                                ChartType::Candle => {
-                                    let candles: Vec<BoxElem> = measurements
-                                        .values
-                                        .iter()
-                                        .map(|(i, candle)| {
-                                            println!("{}", i);
-                                            let lower_whisker = candle.low; // 최저가
-                                            let upper_whisker = candle.high; // 최고가
-                                            let lower_bound = candle.open.min(candle.close); // 몸체 아래쪽 경계
-                                            let upper_bound = candle.open.max(candle.close); // 몸체 위쪽 경계
-                                            let median = (candle.open + candle.close) / 2.0; // 중앙값
-
-                                            let spread = BoxSpread::new(
-                                                lower_whisker, // 최저가
-                                                lower_bound,   // 몸체 아래쪽
-                                                median,        // 중앙값
-                                                upper_bound,   // 몸체 위쪽
-                                                upper_whisker, // 최고가
-                                            );
-
-                                            let color = colors(candle.open, candle.close);
-
-                                            BoxElem::new(*i as f64, spread)
-                                                .fill(color)
-                                                .stroke(egui::Stroke::new(2.0, color))
-                                                .whisker_width(0.5) // 심지 너비
-                                                .box_width(0.8) // 몸통 너비
-                                        })
-                                        .collect();
-
-                                    let box_plot = egui_plot::BoxPlot::new(candles);
-                                    plot_ui.box_plot(box_plot);
-                                }
-                            }
-                            ctx.request_repaint();
-
-                            // if self.show_ma {
-                            if let PlotPoints::Owned(points) = measurements.plot_values() {
-                                // 활성화된 각 이동평균선 표시
-                                for (&period, &is_active) in &self.ma_states {
-                                    if is_active {
-                                        let ma =
-                                            self.calculate_moving_average(&points, period.value());
-                                        let color = match period {
-                                            MAPeriod::MA5 => egui::Color32::from_rgb(255, 0, 0), // 빨강
-                                            MAPeriod::MA10 => egui::Color32::from_rgb(0, 255, 0), // 초록
-                                            MAPeriod::MA20 => egui::Color32::from_rgb(0, 0, 255), // 파랑
-                                            MAPeriod::MA60 => egui::Color32::from_rgb(255, 165, 0), // 주황
-                                            MAPeriod::MA224 => egui::Color32::from_rgb(128, 0, 128), // 보라
-                                        };
-
-                                        plot_ui.line(
-                                            egui_plot::Line::new(PlotPoints::Owned(ma))
-                                                .color(color)
-                                                .width(1.5)
-                                                .name(period.name()),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        // }
-                    });
-                });
 
                 ui.group(|ui| {
-                    let first_value = *self
-                        .measurements
-                        .lock()
-                        .unwrap()
-                        .values
-                        .first_key_value()
-                        .unwrap()
-                        .0 as f64; // 이미 정규화된 값 사용
+                    // let first_value = *self
+                    //     .measurements
+                    //     .lock()
+                    //     .unwrap()
+                    //     .values
+                    //     .first_key_value()
+                    //     .unwrap()
+                    //     .0 as f64; // 이미 정규화된 값 사용
 
-                    let last_value = *self
-                        .measurements
-                        .lock()
-                        .unwrap()
-                        .values
-                        .last_key_value()
-                        .unwrap()
-                        .0 as f64; // 이미 정규화된 값 사용
+                    // let last_value = *self
+                    //     .measurements
+                    //     .lock()
+                    //     .unwrap()
+                    //     .values
+                    //     .last_key_value()
+                    //     .unwrap()
+                    //     .0 as f64; // 이미 정규화된 값 사용
 
-                    let plot = egui_plot::Plot::new("volume_chart")
-                        .height(100.0)
-                        .width(800.)
-                        .view_aspect(5.0)
-                        .auto_bounds(Vec2b::new(false, false))
-                        .show_axes(false)
-                        .include_x(first_value)
-                        .include_x(last_value)
-                        .include_y(0)
-                        .include_y(500000000);
+                    // let plot = egui_plot::Plot::new("volume_chart")
+                    //     .height(100.0)
+                    //     .width(800.)
+                    //     .view_aspect(5.0)
+                    //     .auto_bounds(Vec2b::new(false, false))
+                    //     .show_axes(false)
+                    //     .include_x(first_value)
+                    //     .include_x(last_value)
+                    //     .include_y(0)
+                    //     .include_y(500000000);
 
-                    plot.show(ui, |plot_ui| {
-                        if let Ok(measurements) = self.measurements.lock() {
-                            let bars: Vec<Bar> = measurements
-                                .values
-                                .iter()
-                                .map(|(i, candle)| {
-                                    let color = if candle.close <= candle.open {
-                                        egui::Color32::from_rgba_premultiplied(255, 59, 59, 255)
-                                    } else {
-                                        egui::Color32::from_rgba_premultiplied(66, 133, 255, 255)
-                                    };
+                    // plot.show(ui, |plot_ui| {
+                    //     if let Ok(measurements) = self.measurements.lock() {
+                    //         let bars: Vec<Bar> = measurements
+                    //             .values
+                    //             .iter()
+                    //             .map(|(i, candle)| {
+                    //                 let color = if candle.close <= candle.open {
+                    //                     egui::Color32::from_rgba_premultiplied(255, 59, 59, 255)
+                    //                 } else {
+                    //                     egui::Color32::from_rgba_premultiplied(66, 133, 255, 255)
+                    //                 };
 
-                                    let bar_width = if measurements.values.len() > 1 {
-                                        (last_value - first_value)
-                                            / measurements.values.len() as f64
-                                            * 0.8
-                                    } else {
-                                        0.8
-                                    };
+                    //                 let bar_width = if measurements.values.len() > 1 {
+                    //                     (last_value - first_value)
+                    //                         / measurements.values.len() as f64
+                    //                         * 0.8
+                    //                 } else {
+                    //                     0.8
+                    //                 };
 
-                                    Bar::new(*i as f64, candle.volume / 10.) // 이미 정규화된 타임스탬프 사용
-                                        .width(bar_width)
-                                        .fill(color)
-                                        .stroke(egui::Stroke::new(1.0, color))
-                                })
-                                .collect();
+                    //                 Bar::new(*i as f64, candle.volume / 10.) // 이미 정규화된 타임스탬프 사용
+                    //                     .width(bar_width)
+                    //                     .fill(color)
+                    //                     .stroke(egui::Stroke::new(1.0, color))
+                    //             })
+                    //             .collect();
 
-                            plot_ui.bar_chart(egui_plot::BarChart::new(bars));
-                        }
-                    });
+                    //         plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                    //     }
+                    // });
                 });
                 // RSI Chart
                 ui.group(|ui| {
-                    let first_value = *self
-                        .measurements
-                        .lock()
-                        .unwrap()
-                        .values
-                        .first_key_value()
-                        .unwrap()
-                        .0 as f64;
-                    let last_value = *self
-                        .measurements
-                        .lock()
-                        .unwrap()
-                        .values
-                        .last_key_value()
-                        .unwrap()
-                        .0 as f64;
+                    // let first_value = *self
+                    //     .measurements
+                    //     .lock()
+                    //     .unwrap()
+                    //     .values
+                    //     .first_key_value()
+                    //     .unwrap()
+                    //     .0 as f64;
+                    // let last_value = *self
+                    //     .measurements
+                    //     .lock()
+                    //     .unwrap()
+                    //     .values
+                    //     .last_key_value()
+                    //     .unwrap()
+                    //     .0 as f64;
 
-                    let plot = egui_plot::Plot::new("rsi_chart")
-                        .height(100.0)
-                        .width(800.)
-                        .view_aspect(5.0)
-                        .auto_bounds(Vec2b::new(false, false))
-                        .show_axes(true)
-                        .include_x(first_value) // x축 끝점
-                        .include_x(last_value)
-                        .include_y(0)
-                        .include_y(100)
-                        .allow_boxed_zoom(false)
-                        .allow_zoom(Vec2b::new(false, false))
-                        .allow_scroll(Vec2b::new(true, false))
-                        .allow_drag(Vec2b::new(false, false));
+                    // let plot = egui_plot::Plot::new("rsi_chart")
+                    //     .height(100.0)
+                    //     .width(800.)
+                    //     .view_aspect(5.0)
+                    //     .auto_bounds(Vec2b::new(false, false))
+                    //     .show_axes(true)
+                    //     .include_x(first_value) // x축 끝점
+                    //     .include_x(last_value)
+                    //     .include_y(0)
+                    //     .include_y(100)
+                    //     .allow_boxed_zoom(false)
+                    //     .allow_zoom(Vec2b::new(false, false))
+                    //     .allow_scroll(Vec2b::new(true, false))
+                    //     .allow_drag(Vec2b::new(false, false));
 
                     // RSI Chart 부분만 수정
-                    plot.show(ui, |plot_ui| {
-                        if let Ok(measurements) = self.measurements.lock() {
-                            // RSI 계산 (이제 타임스탬프와 RSI 값 쌍의 벡터를 반환)
-                            let rsi_values = self.calculate_rsi(&measurements.values);
+                    // plot.show(ui, |plot_ui| {
+                    //     if let Ok(measurements) = self.measurements.lock() {
+                    //         // RSI 계산 (이제 타임스탬프와 RSI 값 쌍의 벡터를 반환)
+                    //         let rsi_values = self.calculate_rsi(&measurements.values);
 
-                            // RSI 선 그리기 - 정규화된 타임스탬프 사용
-                            let line_points: Vec<[f64; 2]> = rsi_values
-                                .iter()
-                                .map(|(timestamp, value)| [*timestamp, *value])
-                                .collect();
+                    //         // RSI 선 그리기 - 정규화된 타임스탬프 사용
+                    //         let line_points: Vec<[f64; 2]> = rsi_values
+                    //             .iter()
+                    //             .map(|(timestamp, value)| [*timestamp, *value])
+                    //             .collect();
 
-                            plot_ui.line(
-                                egui_plot::Line::new(egui_plot::PlotPoints::new(line_points))
-                                    .color(egui::Color32::from_rgb(255, 165, 0))
-                                    .width(1.5),
-                            );
+                    //         plot_ui.line(
+                    //             egui_plot::Line::new(egui_plot::PlotPoints::new(line_points))
+                    //                 .color(egui::Color32::from_rgb(255, 165, 0))
+                    //                 .width(1.5),
+                    //         );
 
-                            // 기준선들 (변경 없음)
-                            plot_ui.hline(
-                                egui_plot::HLine::new(70.0)
-                                    .color(egui::Color32::from_rgb(255, 0, 0))
-                                    .width(1.0)
-                                    .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
-                            );
+                    //         // 기준선들 (변경 없음)
+                    //         plot_ui.hline(
+                    //             egui_plot::HLine::new(70.0)
+                    //                 .color(egui::Color32::from_rgb(255, 0, 0))
+                    //                 .width(1.0)
+                    //                 .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
+                    //         );
 
-                            plot_ui.hline(
-                                egui_plot::HLine::new(30.0)
-                                    .color(egui::Color32::from_rgb(0, 255, 0))
-                                    .width(1.0)
-                                    .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
-                            );
+                    //         plot_ui.hline(
+                    //             egui_plot::HLine::new(30.0)
+                    //                 .color(egui::Color32::from_rgb(0, 255, 0))
+                    //                 .width(1.0)
+                    //                 .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
+                    //         );
 
-                            plot_ui.hline(
-                                egui_plot::HLine::new(50.0)
-                                    .color(egui::Color32::GRAY)
-                                    .width(1.0)
-                                    .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
-                            );
-                        }
-                    });
+                    //         plot_ui.hline(
+                    //             egui_plot::HLine::new(50.0)
+                    //                 .color(egui::Color32::GRAY)
+                    //                 .width(1.0)
+                    //                 .style(egui_plot::LineStyle::Dashed { length: 10.0 }),
+                    //         );
+                    //     }
+                    // });
                 });
             });
         });
