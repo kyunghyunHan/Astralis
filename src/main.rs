@@ -48,13 +48,13 @@ struct Stocki {
 
 impl Stocki {
     fn default(look_behind: usize) -> Self {
-        let selected_stock = Arc::new(Mutex::new("005930.KS".to_string()));
+        let selected_stock = Arc::new(Mutex::new("AAPL".to_string()));
         let selected_stock_clone = Arc::clone(&selected_stock);
         let stock_name = selected_stock_clone.lock().unwrap().clone();
-        let new_data = StockData::get_data(&stock_name, "1m");
+        let new_data = StockData::get_data(&stock_name, "1d");
 
         let stocks = vec![
-            "005930.KS".to_string(),
+            "AAPL".to_string(),
             "GOOGL".to_string(),
             "MSFT".to_string(),
             "AMZN".to_string(),
@@ -211,8 +211,8 @@ impl Stocki {
                     .auto_bounds(Vec2b::new(false, false))
                     .include_x(first_value)
                     .include_x(last_value)
-                    .include_y(55000.0)
-                    .include_y(57000.0);
+                    .include_y(0.0)
+                    .include_y(300.0);
 
                 // 나머지 차트 그리기 코드...
                 plot.show(ui, |plot_ui| {
