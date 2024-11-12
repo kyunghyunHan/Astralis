@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 use eframe::egui::{self, Id, RichText, Vec2b};
+use egui::{CentralPanel, Context, FontData, FontDefinitions, SidePanel, TopBottomPanel};
 use egui_plot::{Bar, BoxElem, BoxSpread, PlotPoint, PlotPoints};
 use std::collections::BTreeMap;
 use std::{
@@ -9,7 +10,7 @@ use std::{
 };
 
 use stocki::{
-    types::{ChartType, MAPeriod, MeasurementWindow, StockData, TimeFrame},
+    types::{ChartType, LangType, MAPeriod, MeasurementWindow, StockData, TimeFrame},
     utils::colors,
 };
 
@@ -41,6 +42,7 @@ struct Stocki {
     selected_stock: Arc<Mutex<String>>,
     stocks: Vec<String>,
     chart_type: ChartType,
+    lang_type: LangType,
     time_frame: TimeFrame,
     ma_states: std::collections::HashMap<MAPeriod, bool>,
     chart_id: Id, // 차트 ID 추가
@@ -48,21 +50,31 @@ struct Stocki {
 
 impl Stocki {
     fn default(look_behind: usize) -> Self {
-        let selected_stock = Arc::new(Mutex::new("AAPL".to_string()));
+        let lang_type = LangType::Korean;
+
+        let selected_stock = match lang_type {
+            LangType::English => Arc::new(Mutex::new("AAPL".to_string())),
+            _ => Arc::new(Mutex::new("005930.KS".to_string())),
+        };
         let selected_stock_clone = Arc::clone(&selected_stock);
         let stock_name = selected_stock_clone.lock().unwrap().clone();
-        let new_data = StockData::get_data(&stock_name, "1d");
-
-        let stocks = vec![
-            "AAPL".to_string(),
-            "GOOGL".to_string(),
-            "MSFT".to_string(),
-            "AMZN".to_string(),
-            "META".to_string(),
-            "TSLA".to_string(),
-            "NVDA".to_string(),
-            "005930.KS".to_string()
-        ];
+        let new_data = StockData::get_data(&stock_name, "1d", &lang_type);
+        let stocks = match lang_type {
+            LangType::English => {
+                vec![
+                    "AAPL".to_string(),
+                    "GOOGL".to_string(),
+                    "MSFT".to_string(),
+                    "AMZN".to_string(),
+                    "META".to_string(),
+                    "TSLA".to_string(),
+                    "NVDA".to_string(),
+                ]
+            }
+            _ => {
+                vec!["005930.KS".to_string()]
+            }
+        };
 
         let mut ma_states = std::collections::HashMap::new();
         for period in [
@@ -83,6 +95,7 @@ impl Stocki {
             selected_stock,
             stocks,
             chart_type: ChartType::Line,
+            lang_type: LangType::Korean,
             time_frame: TimeFrame::Day,
             ma_states,
             chart_id: Id::new("stock_chart"), // 차트 ID 초기화
@@ -107,7 +120,6 @@ impl Stocki {
         ma_values
     }
     fn calculate_rsi(&self, prices: &BTreeMap<u64, StockData>) -> Vec<(f64, f64)> {
-        // (timestamp, rsi_value)
         let period = 14;
         if prices.len() < period + 1 {
             return vec![];
@@ -184,8 +196,10 @@ impl Stocki {
     }
     fn update_stock_data(&mut self, stock_name: &str) {
         let stock_type = self.time_frame.to_string();
+        let lang_type = &self.lang_type;
+
         println!("Updating data for timeframe: {}", stock_type); // 디버그용
-        let new_data = StockData::get_data(stock_name, stock_type);
+        let new_data = StockData::get_data(stock_name, stock_type, lang_type);
 
         if let Ok(mut measurements) = self.measurements.lock() {
             // 기존 데이터를 완전히 새로운 데이터로 교체
@@ -324,6 +338,15 @@ impl Stocki {
 ////
 impl eframe::App for Stocki {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut font_definitions = FontDefinitions::default();
+        font_definitions.font_data.insert(
+            "my_font".to_owned(),
+            FontData::from_static(include_bytes!("../assets/font/NanumGothic-Bold.ttf")),
+        );
+        font_definitions
+            .families
+            .insert(egui::FontFamily::Proportional, vec!["my_font".to_owned()]);
+        ctx.set_fonts(font_definitions);
         let now: Instant = Instant::now();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -342,7 +365,35 @@ impl eframe::App for Stocki {
                         });
                     }
                     ui.add_space(16.0);
-                    egui::widgets::global_dark_light_mode_buttons(ui);
+                    // ui.menu_button(&current_stock, |ui| {
+                    //     for stock in &self.stocks {
+                    //         if ui.button(stock).clicked() {
+                    //             selected = Some(stock.clone());
+                    //             ui.close_menu();
+                    //         }
+                    //     }
+                    // });
+                    ui.menu_button(RichText::new("aa").size(14.0), |ui| {
+                        ui.set_min_width(100.0);
+                        let arr = [LangType::English, LangType::Korean];
+
+                        for timeframe in arr {
+                            if ui
+                                .selectable_label(
+                                    self.lang_type == timeframe,
+                                    format!("{:?}", timeframe),
+                                )
+                                .clicked()
+                            {
+                                // 타임프레임이 변경되면 즉시 업데이트
+                                self.lang_type = timeframe;
+                                let stock_name = self.selected_stock.lock().unwrap().clone();
+                                self.update_stock_data(&stock_name);
+                                ctx.request_repaint(); // 강제로 화면 갱신
+                                ui.close_menu();
+                            }
+                        }
+                    });
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -458,7 +509,7 @@ impl eframe::App for Stocki {
                     ui.selectable_value(&mut self.chart_type, ChartType::Line, "Line");
                     ui.add_space(32.0);
 
-                    let button_text = RichText::new("Moving Averages").size(14.0).strong();
+                    let button_text = RichText::new("이동평균선").size(14.0).strong();
                     ui.menu_button(button_text, |ui| {
                         ui.set_min_width(150.0);
 

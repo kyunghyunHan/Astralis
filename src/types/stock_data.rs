@@ -2,58 +2,67 @@ use crate::types::StockData;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use time::Duration;
-use time::OffsetDateTime; // 하나만 유지
 use time::Weekday;
+use time::{OffsetDateTime, UtcOffset}; // 하나만 유지
 use tokio_test;
-use yahoo_finance_api as yahoo; // time 크레이트의 Weekday를 사용합니다.
+use yahoo_finance_api as yahoo;
 
-use yahoo_finance_api::time::macros::datetime;
+use super::LangType; // time 크레이트의 Weekday를 사용합니다.
 impl StockData {
-    // pub fn get_data(stock_name: &str, stock_type: &str) -> BTreeMap<u64, StockData> {
-    //     let provider = yahoo::YahooConnector::new().unwrap();
-
-    //     let end = OffsetDateTime::now_utc();
-    //     println!("{}",end.weekday());
-    //     let start = match end.weekday() {
-    //         Weekday::Monday => end - Duration::days(3),
-    //         Weekday::Tuesday => end - Duration::days(1),
-    //         Weekday::Wednesday => end - Duration::days(1),
-    //         Weekday::Thursday => end - Duration::days(1),
-    //         Weekday::Friday => end - Duration::days(1),
-    //         _ => end - Duration::days(1), // 주말인 경우에는 1일 전부터 데이터를 요청합니다.
-    //     };
-    //     let interval = "1m"; // 1분봉
-
-    //     // 분봉 데이터를 요청할 수 있는 메서드 호출 (라이브러리에 따라 메서드가 다를 수 있음)
-    //     let resp = tokio_test::block_on(provider.get_quote_history_interval(stock_name, start, end, interval))
-    //         .unwrap();
-    //     let quotes = resp.quotes().unwrap();
-
-    //     println!("{}", quotes.len());
-
-    //     BTreeMap::default()
-    // }
-
-    pub fn get_data(stock_name: &str, stock_type: &str) -> BTreeMap<u64, StockData> {
+    pub fn get_data(
+        stock_name: &str,
+        stock_type: &str,
+        lang_type: &LangType,
+    ) -> BTreeMap<u64, StockData> {
         println!("Type: {}", stock_type);
 
         let provider = yahoo::YahooConnector::new().unwrap();
-        let end = OffsetDateTime::now_utc();
-        let start = match end.weekday() {
-            Weekday::Monday => end - Duration::days(1),
-            Weekday::Tuesday => end - Duration::days(1),
-            Weekday::Wednesday => end - Duration::days(1),
-            Weekday::Thursday => end - Duration::days(1),
-            Weekday::Friday => end - Duration::days(1),
-            _ => end - Duration::days(1), // 주말인 경우에는 1일 전부터 데이터를 요청합니다.
-        };
+        let korea_offset = UtcOffset::from_hms(9, 0, 0).unwrap(); // UTC+9
+        let end = OffsetDateTime::now_utc().to_offset(korea_offset);
 
+        let start = match end.weekday() {
+            Weekday::Monday => end - Duration::days(3), // 월요일인 경우 금요일부터 (주말 건너뛰기)
+            Weekday::Sunday => end - Duration::days(2), // 일요일인 경우 금요일부터
+            Weekday::Saturday => end - Duration::days(1), // 토요일인 경우 금요일부터
+            _ => end - Duration::days(1),               // 화~금요일은 전일부터
+        }
+        .replace_hour(9)
+        .unwrap()
+        .replace_minute(0)
+        .unwrap()
+        .replace_second(0)
+        .unwrap()
+        .replace_nanosecond(0)
+        .unwrap();
+        let lang = match lang_type {
+            LangType::English => {}
+            _ => {}
+        };
+        println!("{}", end.weekday());
+        let start = match end.weekday() {
+            Weekday::Monday => end - Duration::days(3), // 월요일인 경우 금요일부터 (주말 건너뛰기)
+            Weekday::Sunday => end - Duration::days(2), // 일요일인 경우 금요일부터
+            Weekday::Saturday => end - Duration::days(1), // 토요일인 경우 금요일부터
+            _ => end,                                   // 화~금요일은 전일부터
+        }
+        .replace_hour(9)
+        .unwrap()
+        .replace_minute(0)
+        .unwrap()
+        .replace_second(0)
+        .unwrap()
+        .replace_nanosecond(0)
+        .unwrap();
+        println!("{}", start);
+        println!("{}", end);
         // 분봉과 일반 데이터 분리해서 처리
         let quotes = match stock_type {
             // 분봉 데이터
             "1m" | "2m" | "5m" | "15m" | "30m" | "60m" => {
-                let resp = tokio_test::block_on(provider.get_quote_history_interval(stock_name, start, end,stock_type))
-                    .unwrap();
+                let resp = tokio_test::block_on(
+                    provider.get_quote_history_interval(stock_name, start, end, stock_type),
+                )
+                .unwrap();
                 resp.quotes().unwrap()
             }
             // 일봉, 주봉, 월봉 데이터
