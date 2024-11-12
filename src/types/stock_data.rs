@@ -15,55 +15,79 @@ impl StockData {
         lang_type: &LangType,
     ) -> BTreeMap<u64, StockData> {
         println!("Type: {}", stock_type);
+        let (timezone_offset, market_open_hour) = match lang_type {
+            LangType::Korean => (
+                UtcOffset::from_hms(9, 0, 0).unwrap(), // UTC+9
+                9,                                     // 한국 시장 시작 시간
+            ),
+            LangType::English => {
+                // 3월~11월은 EDT (UTC-4), 나머지는 EST (UTC-5)
+                let now = OffsetDateTime::now_utc();
+                let month = now.month() as u8;
+
+                match month {
+                    3..=11 => (
+                        UtcOffset::from_hms(-4, 0, 0).unwrap(), // EDT
+                        9,                                      // 미국 시장 시작 시간 (9:30 AM ET)
+                    ),
+                    _ => (
+                        UtcOffset::from_hms(-5, 0, 0).unwrap(), // EST
+                        9,                                      // 미국 시장 시작 시간 (9:30 AM ET)
+                    ),
+                }
+            }
+        };
+
+        println!("{}", timezone_offset);
+        println!("{}", market_open_hour);
 
         let provider = yahoo::YahooConnector::new().unwrap();
-        let korea_offset = UtcOffset::from_hms(9, 0, 0).unwrap(); // UTC+9
-        let end = OffsetDateTime::now_utc().to_offset(korea_offset);
+        // let korea_offset = UtcOffset::from_hms(9, 0, 0).unwrap(); // UTC+9
+        let end = OffsetDateTime::now_utc().to_offset(timezone_offset); // korea_offset 대신 timezone_offset 사용
 
-        let start = match end.weekday() {
-            Weekday::Monday => end - Duration::days(3), // 월요일인 경우 금요일부터 (주말 건너뛰기)
-            Weekday::Sunday => end - Duration::days(2), // 일요일인 경우 금요일부터
-            Weekday::Saturday => end - Duration::days(1), // 토요일인 경우 금요일부터
-            _ => end - Duration::days(1),               // 화~금요일은 전일부터
-        }
-        .replace_hour(9)
-        .unwrap()
-        .replace_minute(0)
-        .unwrap()
-        .replace_second(0)
-        .unwrap()
-        .replace_nanosecond(0)
-        .unwrap();
-        let lang = match lang_type {
-            LangType::English => {}
-            _ => {}
-        };
-        println!("{}", end.weekday());
-        let start = match end.weekday() {
-            Weekday::Monday => end - Duration::days(3), // 월요일인 경우 금요일부터 (주말 건너뛰기)
-            Weekday::Sunday => end - Duration::days(2), // 일요일인 경우 금요일부터
-            Weekday::Saturday => end - Duration::days(1), // 토요일인 경우 금요일부터
-            _ => end,                                   // 화~금요일은 전일부터
-        }
-        .replace_hour(9)
-        .unwrap()
-        .replace_minute(0)
-        .unwrap()
-        .replace_second(0)
-        .unwrap()
-        .replace_nanosecond(0)
-        .unwrap();
-        println!("{}", start);
-        println!("{}", end);
         // 분봉과 일반 데이터 분리해서 처리
         let quotes = match stock_type {
             // 분봉 데이터
             "1m" | "2m" | "5m" | "15m" | "30m" | "60m" => {
+                let start = match lang_type {
+                    LangType::Korean => end
+                        .replace_hour(market_open_hour)
+                        .unwrap()
+                        .replace_minute(0) // 한국 시장은 9:00 AM 시작
+                        .unwrap()
+                        .replace_second(0)
+                        .unwrap()
+                        .replace_nanosecond(0)
+                        .unwrap(),
+                    LangType::English => end
+                        .replace_hour(market_open_hour)
+                        .unwrap()
+                        .replace_minute(30) // 미국 시장은 9:30 AM 시작
+                        .unwrap()
+                        .replace_second(0)
+                        .unwrap()
+                        .replace_nanosecond(0)
+                        .unwrap(),
+                };
+
                 let resp = tokio_test::block_on(
                     provider.get_quote_history_interval(stock_name, start, end, stock_type),
-                )
-                .unwrap();
-                resp.quotes().unwrap()
+                );
+
+                // 에러 처리 추가
+                match resp {
+                    Ok(data) => match data.quotes() {
+                        Ok(quotes) => quotes,
+                        Err(e) => {
+                            println!("Error parsing quotes: {:?}", e);
+                            vec![] // 또는 적절한 에러 처리
+                        }
+                    },
+                    Err(e) => {
+                        println!("Error getting data: {:?}", e);
+                        vec![] // 또는 적절한 에러 처리
+                    }
+                }
             }
             // 일봉, 주봉, 월봉 데이터
             _ => {
@@ -74,7 +98,7 @@ impl StockData {
             }
         };
 
-        println!("Data points: {}", quotes.len());
+        // println!("Data points: {}", quotes.len());
 
         // 정규화 계수
         let normalize_factor = match stock_type {

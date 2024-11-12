@@ -216,7 +216,19 @@ impl Stocki {
                 let first_value = first_key as f64;
                 let last_value = last_key as f64;
                 println!("{}", measurements.values.len());
-
+                let (max_price, min_price) = measurements.values.values().fold(
+                    (f64::MIN, f64::MAX),
+                    |acc, stock_data| {
+                        (
+                            acc.0.max(stock_data.high),
+                            acc.1.min(stock_data.low)
+                        )
+                    }
+                );
+                let price_range = max_price - min_price;
+                let padding = price_range * 0.1;
+                let min_y = (min_price - padding).max(0.0); // 최소값은 0 이상
+                let max_y = max_price + padding;
                 let plot = egui_plot::Plot::new(self.chart_id) // 동적 ID 사용
                     .height(500.0)
                     .width(800.)
@@ -225,8 +237,8 @@ impl Stocki {
                     .auto_bounds(Vec2b::new(false, false))
                     .include_x(first_value)
                     .include_x(last_value)
-                    .include_y(0.0)
-                    .include_y(300.0);
+                    .include_y(min_y)
+                    .include_y(max_y);
 
                 // 나머지 차트 그리기 코드...
                 plot.show(ui, |plot_ui| {
@@ -376,20 +388,42 @@ impl eframe::App for Stocki {
                     ui.menu_button(RichText::new("aa").size(14.0), |ui| {
                         ui.set_min_width(100.0);
                         let arr = [LangType::English, LangType::Korean];
-
+                    
                         for timeframe in arr {
-                            if ui
-                                .selectable_label(
-                                    self.lang_type == timeframe,
-                                    format!("{:?}", timeframe),
-                                )
-                                .clicked()
-                            {
-                                // 타임프레임이 변경되면 즉시 업데이트
+                            let response = ui.selectable_label(
+                                self.lang_type == timeframe,
+                                format!("{:?}", timeframe),
+                            );
+                            
+                            if response.clicked() {
+                                // 언어 타입 변경
                                 self.lang_type = timeframe;
-                                let stock_name = self.selected_stock.lock().unwrap().clone();
-                                self.update_stock_data(&stock_name);
-                                ctx.request_repaint(); // 강제로 화면 갱신
+                                
+                                // 언어에 따른 주식 리스트 업데이트
+                                self.stocks = match self.lang_type {
+                                    LangType::English => {
+                                        vec![
+                                            "AAPL".to_string(),
+                                            "GOOGL".to_string(),
+                                            "MSFT".to_string(),
+                                            "AMZN".to_string(),
+                                            "META".to_string(),
+                                            "TSLA".to_string(),
+                                            "NVDA".to_string(),
+                                        ]
+                                    }
+                                    _ => {
+                                        vec!["005930.KS".to_string()]
+                                    }
+                                };
+                                
+                                // 선택된 주식 초기화 또는 첫 번째 주식으로 설정
+                                if let Ok(mut selected) = self.selected_stock.lock() {
+                                    *selected = self.stocks.first().cloned().unwrap_or_default();
+                                }
+                                
+                                // UI 갱신 요청
+                                ctx.request_repaint();
                                 ui.close_menu();
                             }
                         }
@@ -547,7 +581,7 @@ impl eframe::App for Stocki {
                             TimeFrame::Minute2,
                             TimeFrame::Minute5,
                             TimeFrame::Minute30,
-                            TimeFrame::Minute30,
+                            // TimeFrame::Minute30,
                         ];
 
                         for &timeframe in &time_frames {
