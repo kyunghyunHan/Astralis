@@ -1,10 +1,27 @@
 pub mod measurement_window;
 pub mod stock_data;
+pub mod stocki;
 use std::collections::BTreeMap;
-use std::time::Instant;
 pub mod maperiod;
 pub mod time_frame;
+use eframe::egui::{self, Id, RichText, Vec2b};
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
+pub struct Stocki {
+    pub measurements: Arc<Mutex<MeasurementWindow>>,
+    pub selected_stock: Arc<Mutex<String>>,
+    pub stocks: Vec<String>,
+    pub chart_type: ChartType,
+    pub lang_type: LangType,
+    pub time_frame: TimeFrame,
+    pub ma_states: std::collections::HashMap<MAPeriod, bool>,
+    pub chart_id: Id,  // 차트 ID 추가
+    pub volume_id: Id, // 차트 ID 추가
+    pub rsi_id: Id,    // 차트 ID 추가
+}
 #[derive(Clone)]
 pub enum StockType {
     DAY,
