@@ -25,7 +25,6 @@ use std::{
 impl Stocki {
     pub fn default(look_behind: usize) -> Self {
         let lang_type = LangType::Korean;
-
         let selected_stock = match lang_type {
             LangType::English => Arc::new(Mutex::new("AAPL".to_string())),
             _ => Arc::new(Mutex::new("005930.KS".to_string())),
@@ -72,11 +71,32 @@ impl Stocki {
             lang_type: LangType::Korean,
             time_frame: TimeFrame::Day,
             ma_states,
-            chart_id: Id::new("stock_chart"),  // 차트 ID 초기화
-            volume_id: Id::new("volme_chart"), // 차트 ID 초기화
-            rsi_id: Id::new("rsi_chart"),      // 차트 ID 초기화
+            chart_id: Id::new("stock_chart"),
+            volume_id: Id::new("volme_chart"),
+            rsi_id: Id::new("rsi_chart"),
+            last_update: Instant::now(), // 새로운 필드 추가
         }
     }
+    fn should_update(&self) -> bool {
+        let elapsed = self.last_update.elapsed();
+        
+        // TimeFrame에 따라 업데이트 간격 결정
+        let update_interval = match self.time_frame {
+            // 실시간 데이터가 필요한 짧은 타임프레임
+            TimeFrame::Minute1 => std::time::Duration::from_secs(1),  // 3초마다
+            TimeFrame::Minute2 => std::time::Duration::from_secs(3),  // 3초마다
+            TimeFrame::Minute5 => std::time::Duration::from_secs(3),  // 3초마다
+            TimeFrame::Minute15 => std::time::Duration::from_secs(5), // 5초마다
+            TimeFrame::Minute30 => std::time::Duration::from_secs(5), // 5초마다
+            TimeFrame::Hour1 => std::time::Duration::from_secs(10),   // 10초마다
+            TimeFrame::Day => std::time::Duration::from_secs(30),     // 30초마다
+            TimeFrame::Week => std::time::Duration::from_secs(300),   // 5분마다
+            TimeFrame::Month => std::time::Duration::from_secs(600),  // 10분마다
+        };
+
+        elapsed >= update_interval
+    }
+
     pub fn calculate_moving_average(&self, prices: &[PlotPoint], period: usize) -> Vec<PlotPoint> {
         let mut ma_values = Vec::new();
 
@@ -180,13 +200,16 @@ impl Stocki {
         let stock_type = self.time_frame.to_string();
         let lang_type = &self.lang_type;
 
-        println!("Updating data for timeframe: {}", stock_type); // 디버그용
-        let new_data = StockData::get_data(stock_name, stock_type, lang_type);
+        println!("Updating data for timeframe: {}", stock_type);
+        let new_data = StockData::get_data(stock_name, &stock_type, lang_type);
 
         if let Ok(mut measurements) = self.measurements.lock() {
-            // 기존 데이터를 완전히 새로운 데이터로 교체
             *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
         }
+        
+        // Update the last update time
+        self.last_update = Instant::now();
+        
         self.chart_id = Id::new(format!("stock_chart_{}", rand::random::<u64>()));
         self.volume_id = Id::new(format!("volme_chart_{}", rand::random::<u64>()));
         self.rsi_id = Id::new(format!("rsi_chart_{}", rand::random::<u64>()));
@@ -199,7 +222,7 @@ impl Stocki {
             ) {
                 let first_value = first_key as f64;
                 let last_value = last_key as f64;
-                println!("{}", measurements.values.len());
+                // println!("{}", measurements.values.len());
                 let (max_price, min_price) = measurements
                     .values
                     .values()
@@ -217,7 +240,7 @@ impl Stocki {
                     .show_axes(false)
                     .auto_bounds(Vec2b::new(false, false))
                     .include_x(first_value)
-                    .include_x(last_value)
+                    .include_x(last_value+2.)
                     .include_y(min_y)
                     .include_y(max_y);
 
@@ -323,7 +346,7 @@ impl Stocki {
                     .auto_bounds(Vec2b::new(false, false))
                     .show_axes(false)
                     .include_x(first_value)
-                    .include_x(last_value)
+                    .include_x(last_value+2.)
                     .include_y(0.0)
                     .include_y(max_volume + volume_padding)
                     .allow_boxed_zoom(false)
@@ -366,7 +389,9 @@ impl Stocki {
     }
 
     pub fn draw_rsi_chart(&self, ui: &mut egui::Ui) {
+        
         if let Ok(measurements) = self.measurements.lock() {
+            
             if let (Some((&first_key, _)), Some((&last_key, _))) = (
                 measurements.values.first_key_value(),
                 measurements.values.last_key_value(),
@@ -381,7 +406,7 @@ impl Stocki {
                     .auto_bounds(Vec2b::new(false, false))
                     .show_axes(true)
                     .include_x(first_value)
-                    .include_x(last_value)
+                    .include_x(last_value+2.)
                     .include_y(0)
                     .include_y(100)
                     .allow_boxed_zoom(false)
@@ -434,6 +459,10 @@ impl eframe::App for Stocki {
             .families
             .insert(egui::FontFamily::Proportional, vec!["my_font".to_owned()]);
         ctx.set_fonts(font_definitions);
+        if self.should_update() {
+            let stock_name = self.selected_stock.lock().unwrap().clone();
+            self.update_stock_data(&stock_name);
+        }
         let now: Instant = Instant::now();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {

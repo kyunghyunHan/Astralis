@@ -14,7 +14,7 @@ impl StockData {
         stock_type: &str,
         lang_type: &LangType,
     ) -> BTreeMap<u64, StockData> {
-        println!("Type: {}", stock_type);
+        // println!("Type: {}", stock_type);
         let (timezone_offset, market_open_hour) = match lang_type {
             LangType::Korean => (
                 UtcOffset::from_hms(9, 0, 0).unwrap(), // UTC+9
@@ -37,9 +37,6 @@ impl StockData {
                 }
             }
         };
-
-        println!("{}", timezone_offset);
-        println!("{}", market_open_hour);
 
         let provider = yahoo::YahooConnector::new().unwrap();
         // let korea_offset = UtcOffset::from_hms(9, 0, 0).unwrap(); // UTC+9

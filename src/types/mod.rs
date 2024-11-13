@@ -21,6 +21,7 @@ pub struct Stocki {
     pub chart_id: Id,  // 차트 ID 추가
     pub volume_id: Id, // 차트 ID 추가
     pub rsi_id: Id,    // 차트 ID 추가
+    last_update:Instant
 }
 #[derive(Clone)]
 pub enum StockType {
