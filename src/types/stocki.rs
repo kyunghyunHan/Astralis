@@ -1,17 +1,18 @@
+use crate::types::egui::FontData;
+use crate::types::egui::FontDefinitions;
 use crate::types::BTreeMap;
 use crate::types::ChartType;
 use crate::types::Id;
 use crate::types::LangType;
 use crate::types::MAPeriod;
 use crate::types::MeasurementWindow;
+use crate::types::RichText;
 use crate::types::StockData;
 use crate::types::Stocki;
 use crate::types::TimeFrame;
 use crate::types::Vec2b;
-use crate::types::egui::FontDefinitions;
-use crate::types::egui::FontData;
-use crate::types::RichText;
 use crate::utils::colors;
+use crate::types::SignalType;
 use eframe::egui;
 use egui_plot::Bar;
 use egui_plot::BoxElem;
@@ -79,21 +80,20 @@ impl Stocki {
     }
     fn should_update(&self) -> bool {
         let elapsed = self.last_update.elapsed();
-        
+
         // TimeFrame에 따라 업데이트 간격 결정
         let update_interval = match self.time_frame {
             // 실시간 데이터가 필요한 짧은 타임프레임
-            TimeFrame::Minute1 => std::time::Duration::from_secs(1),  // 3초마다
-            TimeFrame::Minute2 => std::time::Duration::from_secs(3),  // 3초마다
-            TimeFrame::Minute5 => std::time::Duration::from_secs(3),  // 3초마다
+            TimeFrame::Minute1 => std::time::Duration::from_secs(3), // 3초마다
+            TimeFrame::Minute2 => std::time::Duration::from_secs(3), // 3초마다
+            TimeFrame::Minute5 => std::time::Duration::from_secs(3), // 3초마다
             TimeFrame::Minute15 => std::time::Duration::from_secs(5), // 5초마다
             TimeFrame::Minute30 => std::time::Duration::from_secs(5), // 5초마다
-            TimeFrame::Hour1 => std::time::Duration::from_secs(10),   // 10초마다
-            TimeFrame::Day => std::time::Duration::from_secs(30),     // 30초마다
-            TimeFrame::Week => std::time::Duration::from_secs(300),   // 5분마다
-            TimeFrame::Month => std::time::Duration::from_secs(600),  // 10분마다
+            TimeFrame::Hour1 => std::time::Duration::from_secs(10),  // 10초마다
+            TimeFrame::Day => std::time::Duration::from_secs(10),     // 30초마다
+            TimeFrame::Week => std::time::Duration::from_secs(300),  // 5분마다
+            TimeFrame::Month => std::time::Duration::from_secs(600), // 10분마다
         };
-
         elapsed >= update_interval
     }
 
@@ -170,31 +170,142 @@ impl Stocki {
     }
 
     // 매매 신호 생성 함수도 PlotPoint를 사용하도록 수정
-    pub fn generate_signals(
-        &self,
-        short_ma: &[PlotPoint],
-        long_ma: &[PlotPoint],
-    ) -> Vec<PlotPoint> {
-        let mut signals = Vec::new();
+    // pub fn generate_signals(
+    //     &self,
+    //     short_ma: &[PlotPoint],
+    //     long_ma: &[PlotPoint],
+    // ) -> Vec<PlotPoint> {
+    //     let mut signals = Vec::new();
 
-        // 주의: x 값을 그대로 인덱스로 사용하지 않고, 실제 데이터 포인트의 x 값을 사용
-        for i in 1..short_ma.len().min(long_ma.len()) {
-            let prev_short = short_ma[i - 1].y;
-            let prev_long = long_ma[i - 1].y;
-            let curr_short = short_ma[i].y;
-            let curr_long = long_ma[i].y;
+    //     // 주의: x 값을 그대로 인덱스로 사용하지 않고, 실제 데이터 포인트의 x 값을 사용
+    //     for i in 1..short_ma.len().min(long_ma.len()) {
+    //         let prev_short = short_ma[i - 1].y;
+    //         let prev_long = long_ma[i - 1].y;
+    //         let curr_short = short_ma[i].y;
+    //         let curr_long = long_ma[i].y;
 
-            // 골든 크로스 (단기선이 장기선을 상향 돌파)
-            if prev_short <= prev_long && curr_short > curr_long {
-                signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
+    //         // 골든 크로스 (단기선이 장기선을 상향 돌파)
+    //         if prev_short <= prev_long && curr_short > curr_long {
+    //             signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
+    //         }
+    //         // 데드 크로스 (단기선이 장기선을 하향 돌파)
+    //         else if prev_short >= prev_long && curr_short < curr_long {
+    //             signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
+    //         }
+    //     }
+
+    //     signals
+    // }
+    pub fn show_signal_indicators(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Trading Signals: ");
+    
+            if let Ok(measurements) = self.measurements.lock() {
+                if let PlotPoints::Owned(points) = measurements.plot_values() {
+                    // 충분한 데이터가 있는지 먼저 확인
+                    if points.len() < 60 {  // 최소 필요 데이터 포인트
+                        ui.label("Insufficient data for signals");
+                        return;
+                    }
+    
+                    // 이동평균선 계산
+                    let short_ma = self.calculate_moving_average(&points, 20);
+                    let long_ma = self.calculate_moving_average(&points, 60);
+    
+                    // 안전하게 인덱스 확인
+                    let signal = if short_ma.len() >= 2 && long_ma.len() >= 2 {
+                        let last_idx = (short_ma.len() - 1).min(long_ma.len() - 1);
+                        let prev_idx = last_idx.saturating_sub(1);
+    
+                        let prev_short = short_ma[prev_idx].y;
+                        let prev_long = long_ma[prev_idx].y;
+                        let curr_short = short_ma[last_idx].y;
+                        let curr_long = long_ma[last_idx].y;
+    
+                        // 매매 신호 생성
+                        if prev_short <= prev_long && curr_short > curr_long {
+                            Some(SignalType::Buy)
+                        } else if prev_short >= prev_long && curr_short < curr_long {
+                            Some(SignalType::Sell)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+    
+                    // RSI 계산 및 신호 생성
+                    let rsi = if let Some(last_rsi) = self.calculate_rsi(&measurements.values)
+                        .last()
+                        .filter(|&&(_timestamp, value)| !value.is_nan())  // NaN 값 필터링
+                    {
+                        if last_rsi.1 < 30.0 {
+                            Some(SignalType::BuyRSI)
+                        } else if last_rsi.1 > 70.0 {
+                            Some(SignalType::SellRSI)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+    
+                    // MA 신호 표시
+                    ui.group(|ui| {
+                        ui.label("MA Cross:");
+                        match signal {
+                            Some(SignalType::Buy) => {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new("⬆ 매수")
+                                        .color(egui::Color32::from_rgb(0, 255, 0))
+                                        .strong()
+                                ));
+                            }
+                            Some(SignalType::Sell) => {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new("⬇ 매도")
+                                        .color(egui::Color32::from_rgb(255, 0, 0))
+                                        .strong()
+                                ));
+                            }
+                            _ => {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new("대기")  // NEUTRAL 대신 "대기"
+                                        .color(egui::Color32::GRAY)
+                                ));
+                            }
+                        }
+                    });
+                    
+                    // RSI 신호 표시
+                    ui.group(|ui| {
+                        ui.label("RSI:");
+                        match rsi {
+                            Some(SignalType::BuyRSI) => {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new("과매도 - 매수 기회")
+                                        .color(egui::Color32::from_rgb(0, 255, 0))
+                                        .strong()
+                                ));
+                            }
+                            Some(SignalType::SellRSI) => {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new("과매수 - 매도 기회")
+                                        .color(egui::Color32::from_rgb(255, 0, 0))
+                                        .strong()
+                                ));
+                            }
+                            _ => {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new("적정 수준")  // NEUTRAL 대신 "적정 수준"
+                                        .color(egui::Color32::GRAY)
+                                ));
+                            }
+                        }
+                    });
+                }
             }
-            // 데드 크로스 (단기선이 장기선을 하향 돌파)
-            else if prev_short >= prev_long && curr_short < curr_long {
-                signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
-            }
-        }
-
-        signals
+        });
     }
     pub fn update_stock_data(&mut self, stock_name: &str) {
         let stock_type = self.time_frame.to_string();
@@ -206,10 +317,10 @@ impl Stocki {
         if let Ok(mut measurements) = self.measurements.lock() {
             *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
         }
-        
+
         // Update the last update time
         self.last_update = Instant::now();
-        
+
         self.chart_id = Id::new(format!("stock_chart_{}", rand::random::<u64>()));
         self.volume_id = Id::new(format!("volme_chart_{}", rand::random::<u64>()));
         self.rsi_id = Id::new(format!("rsi_chart_{}", rand::random::<u64>()));
@@ -235,12 +346,12 @@ impl Stocki {
                 let max_y = max_price + padding;
                 let plot = egui_plot::Plot::new(self.chart_id) // 동적 ID 사용
                     .height(500.0)
-                    .width(800.)
+                    .width(780.)
                     .view_aspect(10.0)
                     .show_axes(false)
                     .auto_bounds(Vec2b::new(false, false))
                     .include_x(first_value)
-                    .include_x(last_value+2.)
+                    .include_x(last_value + 2.)
                     .include_y(min_y)
                     .include_y(max_y);
 
@@ -341,12 +452,12 @@ impl Stocki {
 
                 let plot = egui_plot::Plot::new(self.volume_id) // 동적 ID 사용
                     .height(100.0)
-                    .width(800.)
+                    .width(780.)
                     .view_aspect(5.0)
                     .auto_bounds(Vec2b::new(false, false))
                     .show_axes(false)
                     .include_x(first_value)
-                    .include_x(last_value+2.)
+                    .include_x(last_value + 2.)
                     .include_y(0.0)
                     .include_y(max_volume + volume_padding)
                     .allow_boxed_zoom(false)
@@ -389,9 +500,7 @@ impl Stocki {
     }
 
     pub fn draw_rsi_chart(&self, ui: &mut egui::Ui) {
-        
         if let Ok(measurements) = self.measurements.lock() {
-            
             if let (Some((&first_key, _)), Some((&last_key, _))) = (
                 measurements.values.first_key_value(),
                 measurements.values.last_key_value(),
@@ -401,12 +510,12 @@ impl Stocki {
 
                 let plot = egui_plot::Plot::new(self.rsi_id) // 동적 ID 사용
                     .height(100.0)
-                    .width(800.)
+                    .width(780.)
                     .view_aspect(5.0)
                     .auto_bounds(Vec2b::new(false, false))
                     .show_axes(true)
                     .include_x(first_value)
-                    .include_x(last_value+2.)
+                    .include_x(last_value + 2.)
                     .include_y(0)
                     .include_y(100)
                     .allow_boxed_zoom(false)
@@ -466,6 +575,8 @@ impl eframe::App for Stocki {
         let now: Instant = Instant::now();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            self.show_signal_indicators(ui);
+
             ui.horizontal(|ui| {
                 egui::menu::bar(ui, |ui| {
                     if !cfg!(target_arch = "wasm32") {
@@ -672,11 +783,11 @@ impl eframe::App for Stocki {
                             TimeFrame::Day,
                             TimeFrame::Week,
                             TimeFrame::Month,
-                            TimeFrame::Hour1,
                             TimeFrame::Minute1,
                             TimeFrame::Minute2,
                             TimeFrame::Minute5,
                             TimeFrame::Minute30,
+                            TimeFrame::Hour1,
                             // TimeFrame::Minute30,
                         ];
 

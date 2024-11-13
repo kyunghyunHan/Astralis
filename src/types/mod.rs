@@ -9,7 +9,14 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-
+// 신호 유형 정의
+#[derive(Debug, Clone, Copy)]
+enum SignalType {
+    Buy,    // 매수 신호 (골든 크로스)
+    Sell,   // 매도 신호 (데드 크로스)
+    BuyRSI, // RSI 기반 매수 신호
+    SellRSI // RSI 기반 매도 신호
+}
 pub struct Stocki {
     pub measurements: Arc<Mutex<MeasurementWindow>>,
     pub selected_stock: Arc<Mutex<String>>,
