@@ -732,11 +732,26 @@ impl eframe::App for Stocki {
                             }
                         }
                     });
-
                     if let Some(selected_stock) = selected {
-                        self.selected_stock = selected_stock; // clone 불필요
-                        self.update_stock_data();
+                        self.selected_stock = selected_stock;
+                        self.lang_type = LangType::English; // 미국 주식 선택시 언어 변경
+                        self.time_frame = TimeFrame::Day;  // 타임프레임 초기화
+                        self.previous_time_frame = TimeFrame::Day;
+                        
+                        // 강제 업데이트
+                        let stock_type = self.time_frame.to_string();
+                        let new_data = StockData::get_data(&self.selected_stock, &stock_type, &self.lang_type);
+                        
+                        if let Ok(mut measurements) = self.measurements.lock() {
+                            *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
+                        }
+                        
+                        self.last_update = Instant::now();
                     }
+                    // if let Some(selected_stock) = selected {
+                    //     self.selected_stock = selected_stock; // clone 불필요
+                    //     self.update_stock_data();
+                    // }
                 });
 
                 ui.group(|ui| {
