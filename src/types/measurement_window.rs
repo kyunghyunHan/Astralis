@@ -1,8 +1,9 @@
 use crate::types::{MeasurementWindow, StockData};
 use egui_plot::{PlotPoint, PlotPoints};
+use rayon::collections::btree_map::Iter;
+use rayon::iter::IntoParallelRefIterator;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
-
 impl MeasurementWindow {
     pub fn new_with_look_behind(look_behind: usize, data: BTreeMap<u64, StockData>) -> Self {
         Self {
@@ -25,16 +26,14 @@ impl MeasurementWindow {
         // Add new value
         self.values.insert(x, candle);
     }
-
     pub fn plot_values(&self) -> PlotPoints {
-        PlotPoints::Owned(
+        PlotPoints::new(
             self.values
                 .iter()
-                .map(|(timestamp, candle)| PlotPoint::new(*timestamp as f64, candle.close))
+                .map(|(k, v)| [*k as f64, v.close as f64])
                 .collect(),
         )
     }
-
     pub fn volumes(&self) -> &Vec<f64> {
         &self.volumes
     }

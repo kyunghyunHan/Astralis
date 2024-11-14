@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 pub mod maperiod;
 pub mod time_frame;
 use eframe::egui::{self, Id, RichText, Vec2b};
+use std::collections::HashMap;
 use std::{
     sync::{Arc, Mutex},
     time::Instant,
@@ -12,23 +13,24 @@ use std::{
 // 신호 유형 정의
 #[derive(Debug, Clone, Copy)]
 enum SignalType {
-    Buy,    // 매수 신호 (골든 크로스)
-    Sell,   // 매도 신호 (데드 크로스)
-    BuyRSI, // RSI 기반 매수 신호
-    SellRSI // RSI 기반 매도 신호
+    Buy,     // 매수 신호 (골든 크로스)
+    Sell,    // 매도 신호 (데드 크로스)
+    BuyRSI,  // RSI 기반 매수 신호
+    SellRSI, // RSI 기반 매도 신호
 }
 pub struct Stocki {
     pub measurements: Arc<Mutex<MeasurementWindow>>,
-    pub selected_stock: Arc<Mutex<String>>,
+    pub selected_stock: String, // Arc<Mutex> 제거
     pub stocks: Vec<String>,
     pub chart_type: ChartType,
     pub lang_type: LangType,
     pub time_frame: TimeFrame,
-    pub ma_states: std::collections::HashMap<MAPeriod, bool>,
-    pub chart_id: Id,  // 차트 ID 추가
-    pub volume_id: Id, // 차트 ID 추가
-    pub rsi_id: Id,    // 차트 ID 추가
-    last_update:Instant
+    pub previous_time_frame: TimeFrame, // 추가
+    pub ma_states: HashMap<MAPeriod, bool>,
+    pub chart_id: Id,
+    pub volume_id: Id,
+    pub rsi_id: Id,
+    pub  last_update: Instant,
 }
 #[derive(Clone)]
 pub enum StockType {
@@ -40,7 +42,7 @@ pub struct MeasurementWindow {
     pub values: BTreeMap<u64, StockData>,
     pub look_behind: usize,
     pub start_time: Instant,
-    volumes: Vec<f64>, // Added volumes field
+    volumes: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]

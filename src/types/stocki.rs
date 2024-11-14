@@ -7,12 +7,12 @@ use crate::types::LangType;
 use crate::types::MAPeriod;
 use crate::types::MeasurementWindow;
 use crate::types::RichText;
+use crate::types::SignalType;
 use crate::types::StockData;
 use crate::types::Stocki;
 use crate::types::TimeFrame;
 use crate::types::Vec2b;
 use crate::utils::colors;
-use crate::types::SignalType;
 use eframe::egui;
 use egui_plot::Bar;
 use egui_plot::BoxElem;
@@ -26,13 +26,13 @@ use std::{
 impl Stocki {
     pub fn default(look_behind: usize) -> Self {
         let lang_type = LangType::Korean;
+        let time_frame = TimeFrame::Day; // 기본값
         let selected_stock = match lang_type {
-            LangType::English => Arc::new(Mutex::new("AAPL".to_string())),
-            _ => Arc::new(Mutex::new("005930.KS".to_string())),
+            LangType::English => "AAPL".to_string(),
+            _ => "005930.KS".to_string(),
         };
-        let selected_stock_clone = Arc::clone(&selected_stock);
-        let stock_name = selected_stock_clone.lock().unwrap().clone();
-        let new_data = StockData::get_data(&stock_name, "1d", &lang_type);
+
+        let new_data = StockData::get_data(&selected_stock, "1d", &lang_type);
         let stocks = match lang_type {
             LangType::English => {
                 vec![
@@ -70,33 +70,52 @@ impl Stocki {
             stocks,
             chart_type: ChartType::Line,
             lang_type: LangType::Korean,
-            time_frame: TimeFrame::Day,
+            time_frame,
+            previous_time_frame: time_frame, // 초기값은 현재 time_frame과 동일하게
             ma_states,
             chart_id: Id::new("stock_chart"),
             volume_id: Id::new("volme_chart"),
             rsi_id: Id::new("rsi_chart"),
-            last_update: Instant::now(), // 새로운 필드 추가
+            last_update: Instant::now(),
         }
     }
+
+    // fn should_update(&self) -> bool {
+    //     let elapsed = self.last_update.elapsed();
+
+    //     // TimeFrame에 따라 업데이트 간격 결정
+    //     let update_interval = match self.time_frame {
+    //         // 실시간 데이터가 필요한 짧은 타임프레임
+    //         TimeFrame::Minute1 => std::time::Duration::from_secs(3), // 3초마다
+    //         TimeFrame::Minute2 => std::time::Duration::from_secs(3), // 3초마다
+    //         TimeFrame::Minute5 => std::time::Duration::from_secs(3), // 3초마다
+    //         TimeFrame::Minute15 => std::time::Duration::from_secs(5), // 5초마다
+    //         TimeFrame::Minute30 => std::time::Duration::from_secs(5), // 5초마다
+    //         TimeFrame::Hour1 => std::time::Duration::from_secs(10),  // 10초마다
+    //         TimeFrame::Day => std::time::Duration::from_secs(10),    // 30초마다
+    //         TimeFrame::Week => std::time::Duration::from_secs(300),  // 5분마다
+    //         TimeFrame::Month => std::time::Duration::from_secs(600), // 10분마다
+    //     };
+    //     elapsed >= update_interval
+    // }
     fn should_update(&self) -> bool {
         let elapsed = self.last_update.elapsed();
 
         // TimeFrame에 따라 업데이트 간격 결정
         let update_interval = match self.time_frame {
-            // 실시간 데이터가 필요한 짧은 타임프레임
-            TimeFrame::Minute1 => std::time::Duration::from_secs(3), // 3초마다
-            TimeFrame::Minute2 => std::time::Duration::from_secs(3), // 3초마다
-            TimeFrame::Minute5 => std::time::Duration::from_secs(3), // 3초마다
-            TimeFrame::Minute15 => std::time::Duration::from_secs(5), // 5초마다
-            TimeFrame::Minute30 => std::time::Duration::from_secs(5), // 5초마다
-            TimeFrame::Hour1 => std::time::Duration::from_secs(10),  // 10초마다
-            TimeFrame::Day => std::time::Duration::from_secs(10),     // 30초마다
-            TimeFrame::Week => std::time::Duration::from_secs(300),  // 5분마다
-            TimeFrame::Month => std::time::Duration::from_secs(600), // 10분마다
+            TimeFrame::Minute1 => std::time::Duration::from_secs(5),
+            TimeFrame::Minute2 => std::time::Duration::from_secs(5),
+            TimeFrame::Minute5 => std::time::Duration::from_secs(10),
+            TimeFrame::Minute15 => std::time::Duration::from_secs(15),
+            TimeFrame::Minute30 => std::time::Duration::from_secs(20),
+            TimeFrame::Hour1 => std::time::Duration::from_secs(30),
+            TimeFrame::Day => std::time::Duration::from_secs(1),
+            TimeFrame::Week => std::time::Duration::from_secs(1),
+            TimeFrame::Month => std::time::Duration::from_secs(1),
         };
+
         elapsed >= update_interval
     }
-
     pub fn calculate_moving_average(&self, prices: &[PlotPoint], period: usize) -> Vec<PlotPoint> {
         let mut ma_values = Vec::new();
 
@@ -199,29 +218,30 @@ impl Stocki {
     pub fn show_signal_indicators(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Trading Signals: ");
-    
+
             if let Ok(measurements) = self.measurements.lock() {
                 if let PlotPoints::Owned(points) = measurements.plot_values() {
                     // 충분한 데이터가 있는지 먼저 확인
-                    if points.len() < 60 {  // 최소 필요 데이터 포인트
+                    if points.len() < 60 {
+                        // 최소 필요 데이터 포인트
                         ui.label("Insufficient data for signals");
                         return;
                     }
-    
+
                     // 이동평균선 계산
                     let short_ma = self.calculate_moving_average(&points, 20);
                     let long_ma = self.calculate_moving_average(&points, 60);
-    
+
                     // 안전하게 인덱스 확인
                     let signal = if short_ma.len() >= 2 && long_ma.len() >= 2 {
                         let last_idx = (short_ma.len() - 1).min(long_ma.len() - 1);
                         let prev_idx = last_idx.saturating_sub(1);
-    
+
                         let prev_short = short_ma[prev_idx].y;
                         let prev_long = long_ma[prev_idx].y;
                         let curr_short = short_ma[last_idx].y;
                         let curr_long = long_ma[last_idx].y;
-    
+
                         // 매매 신호 생성
                         if prev_short <= prev_long && curr_short > curr_long {
                             Some(SignalType::Buy)
@@ -233,11 +253,13 @@ impl Stocki {
                     } else {
                         None
                     };
-    
+
                     // RSI 계산 및 신호 생성
-                    let rsi = if let Some(last_rsi) = self.calculate_rsi(&measurements.values)
+                    let rsi = if let Some(last_rsi) = self
+                        .calculate_rsi(&measurements.values)
                         .last()
-                        .filter(|&&(_timestamp, value)| !value.is_nan())  // NaN 값 필터링
+                        .filter(|&&(_timestamp, value)| !value.is_nan())
+                    // NaN 값 필터링
                     {
                         if last_rsi.1 < 30.0 {
                             Some(SignalType::BuyRSI)
@@ -249,7 +271,7 @@ impl Stocki {
                     } else {
                         None
                     };
-    
+
                     // MA 신호 표시
                     ui.group(|ui| {
                         ui.label("MA Cross:");
@@ -258,14 +280,14 @@ impl Stocki {
                                 ui.add(egui::Label::new(
                                     egui::RichText::new("⬆ 매수")
                                         .color(egui::Color32::from_rgb(0, 255, 0))
-                                        .strong()
+                                        .strong(),
                                 ));
                             }
                             Some(SignalType::Sell) => {
                                 ui.add(egui::Label::new(
                                     egui::RichText::new("⬇ 매도")
                                         .color(egui::Color32::from_rgb(255, 0, 0))
-                                        .strong()
+                                        .strong(),
                                 ));
                             }
                             _ => {
@@ -276,7 +298,7 @@ impl Stocki {
                             }
                         }
                     });
-                    
+
                     // RSI 신호 표시
                     ui.group(|ui| {
                         ui.label("RSI:");
@@ -285,14 +307,14 @@ impl Stocki {
                                 ui.add(egui::Label::new(
                                     egui::RichText::new("과매도 - 매수 기회")
                                         .color(egui::Color32::from_rgb(0, 255, 0))
-                                        .strong()
+                                        .strong(),
                                 ));
                             }
                             Some(SignalType::SellRSI) => {
                                 ui.add(egui::Label::new(
                                     egui::RichText::new("과매수 - 매도 기회")
                                         .color(egui::Color32::from_rgb(255, 0, 0))
-                                        .strong()
+                                        .strong(),
                                 ));
                             }
                             _ => {
@@ -307,24 +329,74 @@ impl Stocki {
             }
         });
     }
-    pub fn update_stock_data(&mut self, stock_name: &str) {
+    pub fn update_stock_data(&mut self) {
+        // selected_stock의 Arc<Mutex> 제거하고 String으로 변경
         let stock_type = self.time_frame.to_string();
         let lang_type = &self.lang_type;
 
-        println!("Updating data for timeframe: {}", stock_type);
-        let new_data = StockData::get_data(stock_name, &stock_type, lang_type);
+        // 타임프레임 변경 확인
+        if self.time_frame != self.previous_time_frame {
+            // 데이터를 먼저 가져오고
+            println!(
+                "TimeFrame changed: {:?} -> {:?}",
+                self.previous_time_frame, self.time_frame
+            );
+            let new_data = StockData::get_data(&self.selected_stock, &stock_type, lang_type);
 
-        if let Ok(mut measurements) = self.measurements.lock() {
-            *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
+            // lock 구간을 최소화
+            if let Ok(mut measurements) = self.measurements.lock() {
+                *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
+            }
+            self.previous_time_frame = self.time_frame;
+        } else {
+            // 마지막 타임스탬프 얻기 - lock 구간 최소화
+            let last_timestamp = self
+                .measurements
+                .lock()
+                .ok()
+                .and_then(|measurements| measurements.values.keys().last().copied());
+
+            if let Some(last_timestamp) = last_timestamp {
+                // 데이터 가져오기 - lock 밖에서
+                if let Some(new_data) = StockData::get_latest_data(
+                    &self.selected_stock,
+                    &stock_type,
+                    lang_type,
+                    last_timestamp,
+                ) {
+                    // 데이터 업데이트 - 최소한의 lock
+                    if let Ok(mut measurements) = self.measurements.lock() {
+                        for (timestamp, data) in new_data {
+                            measurements.values.insert(timestamp, data);
+                        }
+                    }
+                }
+            }
         }
 
-        // Update the last update time
         self.last_update = Instant::now();
-
         self.chart_id = Id::new(format!("stock_chart_{}", rand::random::<u64>()));
         self.volume_id = Id::new(format!("volme_chart_{}", rand::random::<u64>()));
         self.rsi_id = Id::new(format!("rsi_chart_{}", rand::random::<u64>()));
     }
+    // pub fn update_stock_data(&mut self, stock_name: &str) {
+    //     let stock_type = self.time_frame.to_string();
+    //     let lang_type = &self.lang_type;
+
+    //     println!("Updating data for timeframe: {}", stock_type);
+    //     let new_data = StockData::get_data(stock_name, &stock_type, lang_type);
+
+    //     if let Ok(mut measurements) = self.measurements.lock() {
+    //         *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
+    //     }
+
+    //     // Update the last update time
+    //     self.last_update = Instant::now();
+
+    //     self.chart_id = Id::new(format!("stock_chart_{}", rand::random::<u64>()));
+    //     self.volume_id = Id::new(format!("volme_chart_{}", rand::random::<u64>()));
+    //     self.rsi_id = Id::new(format!("rsi_chart_{}", rand::random::<u64>()));
+    // }
     pub fn draw_chart(&self, ui: &mut egui::Ui) {
         if let Ok(measurements) = self.measurements.lock() {
             if let (Some((&first_key, _)), Some((&last_key, _))) = (
@@ -569,8 +641,7 @@ impl eframe::App for Stocki {
             .insert(egui::FontFamily::Proportional, vec!["my_font".to_owned()]);
         ctx.set_fonts(font_definitions);
         if self.should_update() {
-            let stock_name = self.selected_stock.lock().unwrap().clone();
-            self.update_stock_data(&stock_name);
+            self.update_stock_data();
         }
         let now: Instant = Instant::now();
 
@@ -625,9 +696,8 @@ impl eframe::App for Stocki {
                                 };
 
                                 // 선택된 주식 초기화 또는 첫 번째 주식으로 설정
-                                if let Ok(mut selected) = self.selected_stock.lock() {
-                                    *selected = self.stocks.first().cloned().unwrap_or_default();
-                                }
+                                self.selected_stock = self.stocks.first().cloned().unwrap_or_default();
+
 
                                 // UI 갱신 요청
                                 ctx.request_repaint();
@@ -650,10 +720,10 @@ impl eframe::App for Stocki {
 
                 // Stock selector
                 ui.group(|ui| {
-                    let current_stock = self.selected_stock.lock().unwrap().clone();
+                    // lock 불필요, 직접 참조
                     let mut selected = None;
-
-                    ui.menu_button(&current_stock, |ui| {
+                
+                    ui.menu_button(&self.selected_stock, |ui| {  // 직접 selected_stock 사용
                         for stock in &self.stocks {
                             if ui.button(stock).clicked() {
                                 selected = Some(stock.clone());
@@ -661,10 +731,10 @@ impl eframe::App for Stocki {
                             }
                         }
                     });
-
+                
                     if let Some(selected_stock) = selected {
-                        *self.selected_stock.lock().unwrap() = selected_stock.clone();
-                        self.update_stock_data(&selected_stock);
+                        self.selected_stock = selected_stock;  // clone 불필요
+                        self.update_stock_data();
                     }
                 });
 
@@ -799,21 +869,31 @@ impl eframe::App for Stocki {
                                 )
                                 .clicked()
                             {
-                                // 타임프레임이 변경되면 즉시 업데이트
-                                self.time_frame = timeframe;
-                                let stock_name = self.selected_stock.lock().unwrap().clone();
-                                self.update_stock_data(&stock_name);
-                                ctx.request_repaint(); // 강제로 화면 갱신
+                                self.time_frame = timeframe; // 새로운 타임프레임 설정
+                                ctx.request_repaint();
                                 ui.close_menu();
                             }
+                            // if ui
+                            //     .selectable_label(
+                            //         self.time_frame == timeframe,
+                            //         timeframe.display_name(),
+                            //     )
+                            //     .clicked()
+                            // {
+                            //     // 타임프레임이 변경되면 즉시 업데이트
+                            //     self.time_frame = timeframe;
+                            //     let stock_name = self.selected_stock.lock().unwrap().clone();
+                            //     self.update_stock_data(&stock_name);
+                            //     ctx.request_repaint(); // 강제로 화면 갱신
+                            //     ui.close_menu();
+                            // }
                         }
                     });
 
                     if let Some(new_timeframe) = selected_timeframe {
                         if new_timeframe != self.time_frame {
                             self.time_frame = new_timeframe;
-                            let stock_name = self.selected_stock.lock().unwrap().clone();
-                            self.update_stock_data(&stock_name);
+                            self.update_stock_data();  // 내부에서 직접 selected_stock 접근
                         }
                     }
                 });
