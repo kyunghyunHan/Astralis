@@ -696,8 +696,8 @@ impl eframe::App for Stocki {
                                 };
 
                                 // 선택된 주식 초기화 또는 첫 번째 주식으로 설정
-                                self.selected_stock = self.stocks.first().cloned().unwrap_or_default();
-
+                                self.selected_stock =
+                                    self.stocks.first().cloned().unwrap_or_default();
 
                                 // UI 갱신 요청
                                 ctx.request_repaint();
@@ -722,8 +722,9 @@ impl eframe::App for Stocki {
                 ui.group(|ui| {
                     // lock 불필요, 직접 참조
                     let mut selected = None;
-                
-                    ui.menu_button(&self.selected_stock, |ui| {  // 직접 selected_stock 사용
+
+                    ui.menu_button(&self.selected_stock, |ui| {
+                        // 직접 selected_stock 사용
                         for stock in &self.stocks {
                             if ui.button(stock).clicked() {
                                 selected = Some(stock.clone());
@@ -731,9 +732,9 @@ impl eframe::App for Stocki {
                             }
                         }
                     });
-                
+
                     if let Some(selected_stock) = selected {
-                        self.selected_stock = selected_stock;  // clone 불필요
+                        self.selected_stock = selected_stock; // clone 불필요
                         self.update_stock_data();
                     }
                 });
@@ -893,7 +894,7 @@ impl eframe::App for Stocki {
                     if let Some(new_timeframe) = selected_timeframe {
                         if new_timeframe != self.time_frame {
                             self.time_frame = new_timeframe;
-                            self.update_stock_data();  // 내부에서 직접 selected_stock 접근
+                            self.update_stock_data(); // 내부에서 직접 selected_stock 접근
                         }
                     }
                 });
