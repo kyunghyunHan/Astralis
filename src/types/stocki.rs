@@ -103,12 +103,12 @@ impl Stocki {
 
         // TimeFrame에 따라 업데이트 간격 결정
         let update_interval = match self.time_frame {
-            TimeFrame::Minute1 => std::time::Duration::from_secs(5),
-            TimeFrame::Minute2 => std::time::Duration::from_secs(5),
-            TimeFrame::Minute5 => std::time::Duration::from_secs(10),
-            TimeFrame::Minute15 => std::time::Duration::from_secs(15),
-            TimeFrame::Minute30 => std::time::Duration::from_secs(20),
-            TimeFrame::Hour1 => std::time::Duration::from_secs(30),
+            TimeFrame::Minute1 => std::time::Duration::from_secs(1),
+            TimeFrame::Minute2 => std::time::Duration::from_secs(1),
+            TimeFrame::Minute5 => std::time::Duration::from_secs(1),
+            TimeFrame::Minute15 => std::time::Duration::from_secs(1),
+            TimeFrame::Minute30 => std::time::Duration::from_secs(1),
+            TimeFrame::Hour1 => std::time::Duration::from_secs(1),
             TimeFrame::Day => std::time::Duration::from_secs(1),
             TimeFrame::Week => std::time::Duration::from_secs(1),
             TimeFrame::Month => std::time::Duration::from_secs(1),

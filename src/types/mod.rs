@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
+
 // 신호 유형 정의
 #[derive(Debug, Clone, Copy)]
 enum SignalType {
@@ -64,7 +65,7 @@ pub enum LangType {
     English,
     Korean,
 }
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeFrame {
     Minute1,  // 1분봉
     Minute2,  // 2분봉
