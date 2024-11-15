@@ -80,24 +80,6 @@ impl Stocki {
         }
     }
 
-    // fn should_update(&self) -> bool {
-    //     let elapsed = self.last_update.elapsed();
-
-    //     // TimeFrame에 따라 업데이트 간격 결정
-    //     let update_interval = match self.time_frame {
-    //         // 실시간 데이터가 필요한 짧은 타임프레임
-    //         TimeFrame::Minute1 => std::time::Duration::from_secs(3), // 3초마다
-    //         TimeFrame::Minute2 => std::time::Duration::from_secs(3), // 3초마다
-    //         TimeFrame::Minute5 => std::time::Duration::from_secs(3), // 3초마다
-    //         TimeFrame::Minute15 => std::time::Duration::from_secs(5), // 5초마다
-    //         TimeFrame::Minute30 => std::time::Duration::from_secs(5), // 5초마다
-    //         TimeFrame::Hour1 => std::time::Duration::from_secs(10),  // 10초마다
-    //         TimeFrame::Day => std::time::Duration::from_secs(10),    // 30초마다
-    //         TimeFrame::Week => std::time::Duration::from_secs(300),  // 5분마다
-    //         TimeFrame::Month => std::time::Duration::from_secs(600), // 10분마다
-    //     };
-    //     elapsed >= update_interval
-    // }
     fn should_update(&self) -> bool {
         let elapsed = self.last_update.elapsed();
 
@@ -188,33 +170,6 @@ impl Stocki {
         rsi_values
     }
 
-    // 매매 신호 생성 함수도 PlotPoint를 사용하도록 수정
-    // pub fn generate_signals(
-    //     &self,
-    //     short_ma: &[PlotPoint],
-    //     long_ma: &[PlotPoint],
-    // ) -> Vec<PlotPoint> {
-    //     let mut signals = Vec::new();
-
-    //     // 주의: x 값을 그대로 인덱스로 사용하지 않고, 실제 데이터 포인트의 x 값을 사용
-    //     for i in 1..short_ma.len().min(long_ma.len()) {
-    //         let prev_short = short_ma[i - 1].y;
-    //         let prev_long = long_ma[i - 1].y;
-    //         let curr_short = short_ma[i].y;
-    //         let curr_long = long_ma[i].y;
-
-    //         // 골든 크로스 (단기선이 장기선을 상향 돌파)
-    //         if prev_short <= prev_long && curr_short > curr_long {
-    //             signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
-    //         }
-    //         // 데드 크로스 (단기선이 장기선을 하향 돌파)
-    //         else if prev_short >= prev_long && curr_short < curr_long {
-    //             signals.push(PlotPoint::new(i as f64, curr_short)); // i를 x 값으로 사용
-    //         }
-    //     }
-
-    //     signals
-    // }
     pub fn show_signal_indicators(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Trading Signals: ");
@@ -735,17 +690,18 @@ impl eframe::App for Stocki {
                     if let Some(selected_stock) = selected {
                         self.selected_stock = selected_stock;
                         self.lang_type = LangType::English; // 미국 주식 선택시 언어 변경
-                        self.time_frame = TimeFrame::Day;  // 타임프레임 초기화
+                        self.time_frame = TimeFrame::Day; // 타임프레임 초기화
                         self.previous_time_frame = TimeFrame::Day;
-                        
+
                         // 강제 업데이트
                         let stock_type = self.time_frame.to_string();
-                        let new_data = StockData::get_data(&self.selected_stock, &stock_type, &self.lang_type);
-                        
+                        let new_data =
+                            StockData::get_data(&self.selected_stock, &stock_type, &self.lang_type);
+
                         if let Ok(mut measurements) = self.measurements.lock() {
                             *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
                         }
-                        
+
                         self.last_update = Instant::now();
                     }
                     // if let Some(selected_stock) = selected {

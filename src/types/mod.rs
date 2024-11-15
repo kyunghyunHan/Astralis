@@ -60,7 +60,7 @@ pub enum ChartType {
     Line,
 }
 
-#[derive(PartialEq, Clone, Debug)] // derive 속성 추가
+#[derive(PartialEq, Clone, Debug,Eq,Hash)] // derive 속성 추가
 pub enum LangType {
     English,
     Korean,
