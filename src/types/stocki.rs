@@ -19,10 +19,14 @@ use egui_plot::BoxElem;
 use egui_plot::BoxSpread;
 use egui_plot::PlotPoint;
 use egui_plot::PlotPoints;
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
+#[cfg(debug_assertions)]
+static DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
 impl Stocki {
     pub fn default(look_behind: usize) -> Self {
         let lang_type = LangType::Korean;
@@ -563,21 +567,32 @@ impl Stocki {
 }
 impl eframe::App for Stocki {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut font_definitions = FontDefinitions::default();
-        font_definitions.font_data.insert(
-            "my_font".to_owned(),
-            FontData::from_static(include_bytes!("../../assets/font/NanumGothic-Bold.ttf")),
-        );
-        font_definitions
-            .families
-            .insert(egui::FontFamily::Proportional, vec!["my_font".to_owned()]);
-        ctx.set_fonts(font_definitions);
+        // 폰트 설정 - 한 번만 실행되도록 static으로 설정
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let mut font_definitions = FontDefinitions::default();
+            font_definitions.font_data.insert(
+                "my_font".to_owned(),
+                FontData::from_static(include_bytes!("../../assets/font/NanumGothic-Bold.ttf")),
+            );
+            font_definitions
+                .families
+                .insert(egui::FontFamily::Proportional, vec!["my_font".to_owned()]);
+            ctx.set_fonts(font_definitions);
+        });
+        let needs_update = self.should_update();
+        if needs_update {
+            self.update_stock_data();
+        }
+
+        let now = Instant::now();
+
         if self.should_update() {
             self.update_stock_data();
         }
         let now: Instant = Instant::now();
 
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        let top_panel_response = egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             self.show_signal_indicators(ui);
 
             ui.horizontal(|ui| {
@@ -644,7 +659,7 @@ impl eframe::App for Stocki {
                 });
             });
         });
-        egui::SidePanel::left("stock_panel")
+        let side_panel_response = egui::SidePanel::left("stock_panel")
             .resizable(true)
             .default_width(200.0)
             .show(ctx, |ui| {
@@ -761,7 +776,7 @@ impl eframe::App for Stocki {
                 });
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        let central_panel_response = egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical(|ui| {
                 // Chart Controls
                 ui.horizontal(|ui| {
@@ -857,7 +872,7 @@ impl eframe::App for Stocki {
                 });
             });
         });
-        egui::TopBottomPanel::bottom("bottom_panel")
+        let bottom_panel_response = egui::TopBottomPanel::bottom("bottom_panel")
             .resizable(true)
             .default_height(150.0)
             .show(ctx, |ui| {
@@ -872,6 +887,21 @@ impl eframe::App for Stocki {
                     });
                 });
             });
-        ctx.request_repaint();
+
+        let is_any_panel_hovered = top_panel_response.response.hovered()
+            || side_panel_response.response.hovered()
+            || central_panel_response.response.hovered()
+            || bottom_panel_response.response.hovered();
+
+        if is_any_panel_hovered || needs_update {
+            ctx.request_repaint();
+        } else {
+            #[cfg(debug_assertions)]
+            {
+                let count = DEBUG_COUNT.fetch_add(1, Ordering::SeqCst);
+                println!("Debug update count: {}", count);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
     }
 }
