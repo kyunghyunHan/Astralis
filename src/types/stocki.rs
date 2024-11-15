@@ -285,44 +285,38 @@ impl Stocki {
         });
     }
     pub fn update_stock_data(&mut self) {
-        // selected_stock의 Arc<Mutex> 제거하고 String으로 변경
         let stock_type = self.time_frame.to_string();
         let lang_type = &self.lang_type;
 
-        // 타임프레임 변경 확인
+        // 타임프레임이 변경된 경우에만 전체 데이터를 새로 가져옴
         if self.time_frame != self.previous_time_frame {
-            // 데이터를 먼저 가져오고
             println!(
                 "TimeFrame changed: {:?} -> {:?}",
                 self.previous_time_frame, self.time_frame
             );
             let new_data = StockData::get_data(&self.selected_stock, &stock_type, lang_type);
 
-            // lock 구간을 최소화
             if let Ok(mut measurements) = self.measurements.lock() {
                 *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
             }
             self.previous_time_frame = self.time_frame;
         } else {
-            // 마지막 타임스탬프 얻기 - lock 구간 최소화
-            let last_timestamp = self
-                .measurements
-                .lock()
-                .ok()
-                .and_then(|measurements| measurements.values.keys().last().copied());
+            // 그외의 경우는 마지막 타임스탬프 이후의 데이터만 가져옴
+            if let Ok(measurements) = self.measurements.lock() {
+                if let Some(&last_timestamp) = measurements.values.keys().last() {
+                    if let Some(new_data) = StockData::get_latest_data(
+                        &self.selected_stock,
+                        &stock_type,
+                        lang_type,
+                        last_timestamp,
+                    ) {
+                        drop(measurements); // 먼저 lock 해제
 
-            if let Some(last_timestamp) = last_timestamp {
-                // 데이터 가져오기 - lock 밖에서
-                if let Some(new_data) = StockData::get_latest_data(
-                    &self.selected_stock,
-                    &stock_type,
-                    lang_type,
-                    last_timestamp,
-                ) {
-                    // 데이터 업데이트 - 최소한의 lock
-                    if let Ok(mut measurements) = self.measurements.lock() {
-                        for (timestamp, data) in new_data {
-                            measurements.values.insert(timestamp, data);
+                        // 새로운 데이터만 추가
+                        if let Ok(mut measurements) = self.measurements.lock() {
+                            for (timestamp, data) in new_data {
+                                measurements.values.insert(timestamp, data);
+                            }
                         }
                     }
                 }
@@ -334,24 +328,7 @@ impl Stocki {
         self.volume_id = Id::new(format!("volme_chart_{}", rand::random::<u64>()));
         self.rsi_id = Id::new(format!("rsi_chart_{}", rand::random::<u64>()));
     }
-    // pub fn update_stock_data(&mut self, stock_name: &str) {
-    //     let stock_type = self.time_frame.to_string();
-    //     let lang_type = &self.lang_type;
 
-    //     println!("Updating data for timeframe: {}", stock_type);
-    //     let new_data = StockData::get_data(stock_name, &stock_type, lang_type);
-
-    //     if let Ok(mut measurements) = self.measurements.lock() {
-    //         *measurements = MeasurementWindow::new_with_look_behind(1000, new_data);
-    //     }
-
-    //     // Update the last update time
-    //     self.last_update = Instant::now();
-
-    //     self.chart_id = Id::new(format!("stock_chart_{}", rand::random::<u64>()));
-    //     self.volume_id = Id::new(format!("volme_chart_{}", rand::random::<u64>()));
-    //     self.rsi_id = Id::new(format!("rsi_chart_{}", rand::random::<u64>()));
-    // }
     pub fn draw_chart(&self, ui: &mut egui::Ui) {
         if let Ok(measurements) = self.measurements.lock() {
             if let (Some((&first_key, _)), Some((&last_key, _))) = (

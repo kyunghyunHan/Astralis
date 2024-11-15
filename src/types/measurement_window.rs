@@ -38,12 +38,6 @@ impl MeasurementWindow {
         &self.volumes
     }
 
-    // pub fn high_price(&self) -> Option<f64> {
-    //     self.values
-    //         .values()
-    //         .copied()
-    //         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-    // }
     pub fn highs(&self) -> Vec<(u64, f64)> {
         self.values
             .iter()
