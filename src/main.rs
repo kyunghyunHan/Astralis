@@ -122,21 +122,6 @@ impl Default for Counter {
                 },
             );
         }
-
-        // let candlesticks = fetch_daily_candles().unwrap_or_else(|_| {
-        //     let mut default_map = BTreeMap::new();
-        //     default_map.insert(
-        //         1731915812548,
-        //         Candlestick {
-        //             open: 100.0,
-        //             close: 110.0,
-        //             high: 115.0,
-        //             low: 95.0,
-        //         },
-        //     );
-        //     default_map
-        // });
-
         Self {
             candlesticks: fetch_daily_candles("KRW-BTC").unwrap_or_default(),
             timer_enabled: true,
@@ -274,10 +259,6 @@ impl Counter {
 
         let remove_button = button(text("Remove Candlestick").size(8)).padding(10);
 
-        // let styled_pick_list = pick_list(fruits, self.selected_option, Message::FruitSelected)
-        //     .text_size(10)
-        //     .padding(10);
-
         Column::new()
             .push(
                 Row::new()
@@ -309,6 +290,7 @@ impl Counter {
         match message {
             Message::SelectCoin(symbol) => {
                 self.selected_coin = symbol.clone();
+                println!("{}", self.selected_coin);
                 // 새로운 코인의 캔들스틱 데이터 불러오기
                 if let Ok(candles) = fetch_daily_candles(&format!("KRW-{}", symbol)) {
                     self.candlesticks = candles;
@@ -333,15 +315,6 @@ impl Counter {
                     candlestick.high = candlestick.high.max(trade_price);
                     candlestick.low = candlestick.low.min(trade_price);
                     candlestick.close = trade_price;
-
-                    println!(
-                        "Updated candlestick: Day: {}, Open: {}, High: {}, Low: {}, Close: {}",
-                        day_timestamp,
-                        candlestick.open,
-                        candlestick.high,
-                        candlestick.low,
-                        candlestick.close
-                    );
                 } else {
                     // 새로운 일봉 캔들 생성
                     let new_candlestick = Candlestick {
@@ -350,10 +323,7 @@ impl Counter {
                         low: trade_price,
                         close: trade_price,
                     };
-                    println!(
-                        "New candlestick: Day: {}, Price: {}",
-                        day_timestamp, trade_price
-                    );
+
                     self.candlesticks.insert(day_timestamp, new_candlestick);
                 }
 
