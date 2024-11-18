@@ -1,4 +1,9 @@
+use std::collections::BTreeMap;
+
 use iced::time::{self, Duration, Instant};
+use iced::widget::Row;
+use serde::{Deserialize, Serialize};
+
 use iced::{
     mouse,
     widget::{
@@ -26,7 +31,6 @@ enum Fruit {
     Tomato,
 }
 
-#[derive(Default)]
 struct Counter {
     timer_enabled: bool, // 타이머 상태 추가
 
@@ -42,6 +46,7 @@ struct Candlestick {
     high: f32,
     low: f32,
 }
+
 #[derive(Default)]
 struct ChartState {
     offset: f32,
@@ -77,7 +82,36 @@ impl std::fmt::Display for Fruit {
         })
     }
 }
+impl Default for Counter {
+    fn default() -> Self {
+        let daily_candles = fetch_daily_candles().unwrap_or_else(|_| {
+            let mut default_map = BTreeMap::new();
+            default_map.insert(
+                0,
+                Candlestick {
+                    open: 100.0,
+                    close: 110.0,
+                    high: 115.0,
+                    low: 95.0,
+                },
+            );
+            default_map
+        });
 
+        // BTreeMap을 Vec<Candlestick>으로 변환
+        let candlesticks: Vec<Candlestick> = daily_candles
+            .into_iter()
+            .map(|(_, candle)| candle)
+            .collect();
+
+        Self {
+            candlesticks,
+            timer_enabled: true,
+            selected_option: None,
+            auto_scroll: true,
+        }
+    }
+}
 impl Counter {
     pub fn subscription(&self) -> Subscription<Message> {
         if self.timer_enabled {
@@ -86,24 +120,6 @@ impl Counter {
             Subscription::none()
         }
     }
-    pub fn new() -> Self {
-        Self {
-            candlesticks: vec![
-                Candlestick {
-                    open: 100.0,
-                    close: 110.0,
-                    high: 115.0,
-                    low: 95.0,
-                },
-                // 초기 데이터 추가
-            ],
-            timer_enabled: true, // 타이머 기본값을 true로 설정
-
-            selected_option: None,
-            auto_scroll: true, // 자동 스크롤 초기 상태 추가
-        }
-    }
-
     pub fn view(&self) -> Element<Message> {
         let canvas = Canvas::new(Chart::new(self.candlesticks.clone()))
             .width(Length::Fill)
@@ -116,17 +132,27 @@ impl Counter {
             Fruit::Tomato,
         ];
 
+        // 버튼 스타일 수정
+        let add_button = button(text("Add Candlestick").size(16)).padding(10);
+
+        let remove_button = button(text("Remove Candlestick").size(16)).padding(10);
+
+        let styled_pick_list =
+            pick_list(fruits, self.selected_option, Message::FruitSelected).padding(10);
+
         Column::new()
+            .push(container(text("Candlestick Chart").size(24)).padding(20))
             .push(
-                pick_list(fruits, self.selected_option, Message::FruitSelected)
-                    .placeholder("Select your favorite fruit..."),
+                Row::new()
+                    .spacing(10)
+                    .push(styled_pick_list)
+                    .push(add_button)
+                    .push(remove_button),
             )
-            .push(button("Add Candlestick").on_press(Message::AddCandlestick))
-            .push(button("Remove Candlestick").on_press(Message::RemoveCandlestick))
             .push(
-                Container::new(canvas)
+                container(canvas)
                     .width(Length::Fill)
-                    .height(Length::from(500))
+                    .height(Length::Fill)
                     .padding(20),
             )
             .into()
@@ -287,9 +313,49 @@ impl<Message> Program<Message> for Chart {
         vec![frame.into_geometry()]
     }
 }
+fn fetch_daily_candles() -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
+    let rt = tokio::runtime::Runtime::new()?;
+
+    rt.block_on(async {
+        let url = "https://api.upbit.com/v1/candles/days?market=KRW-BTC&count=200";
+        let response = reqwest::get(url).await?.json::<Vec<UpbitCandle>>().await?;
+
+        // UpbitCandle을 우리의 Candlestick 형식으로 변환
+        Ok(response
+            .into_iter()
+            .map(|candle| {
+                (
+                    candle.timestamp, // BTreeMap의 키로 timestamp 사용
+                    Candlestick {
+                        open: candle.opening_price,
+                        close: candle.trade_price,
+                        high: candle.high_price,
+                        low: candle.low_price,
+                    },
+                )
+            })
+            .collect())
+    })
+}
 fn main() -> iced::Result {
-    let mut counter = Counter::new();
+    let counter = Counter::default();
+
     iced::application("Candlestick Chart", Counter::update, Counter::view)
         .subscription(Counter::subscription)
         .run()
+}
+
+#[derive(Debug, Deserialize)]
+struct UpbitCandle {
+    candle_acc_trade_price: f32,  // 누적 거래 금액
+    candle_acc_trade_volume: f32, // 누적 거래량
+    candle_date_time_kst: String, // 한국 표준시 날짜
+    change_price: f32,            // 변동 가격
+    change_rate: f32,             // 변동 비율
+    high_price: f32,              // 고가
+    low_price: f32,               // 저가
+    opening_price: f32,           // 시가
+    prev_closing_price: f32,      // 이전 종가
+    timestamp: u64,               // 타임스탬프
+    trade_price: f32,             // 현재가
 }
