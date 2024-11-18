@@ -19,19 +19,30 @@ use iced::{
     },
     Color, Element, Length, Point, Rectangle, Size, Subscription,
 };
+
+use async_stream::stream;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
-use tokio_tungstenite::connect_async;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME}; // 여기에 Message를 임포트
 enum State {
     Disconnected,
     Connected(WebSocketStream<MaybeTlsStream<TcpStream>>),
 }
+
+#[derive(Debug, Clone)]
+struct CoinInfo {
+    symbol: String,
+    name: String,
+    price: f64,
+    change_percent: f64,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
-    AddCandlestick,
+    AddCandlestick((u64, UpbitTrade)), // UpbitTrade 데이터 포함
     RemoveCandlestick,
     FruitSelected(Fruit),
     Error,
@@ -99,7 +110,7 @@ impl Default for Counter {
         let candlesticks = fetch_daily_candles().unwrap_or_else(|_| {
             let mut default_map = BTreeMap::new();
             default_map.insert(
-                0,
+                1731915812548,
                 Candlestick {
                     open: 100.0,
                     close: 110.0,
@@ -150,35 +161,60 @@ struct UpbitWebSocketData {
     low_price: f32,          // 저가
     sequential_id: u64,      // 체결 번호
 }
+
+#[derive(Debug, Deserialize, Clone)]
+struct UpbitTrade {
+    #[serde(rename = "type")]
+    trade_type: String,
+    code: String,
+    timestamp: u64,
+    trade_price: f64,
+    trade_volume: f64,
+    ask_bid: String,
+    prev_closing_price: f64,
+    change: String,
+    change_price: f64,
+    sequential_id: u64,
+    stream_type: String,
+}
+
 enum Input {
     Subscribe,
 }
 
 fn upbit_connection() -> impl Stream<Item = Message> {
-    async_stream::stream! {
+    stream! {
         let url = Url::parse("wss://api.upbit.com/websocket/v1").unwrap();
-
         loop {
-            if let Ok((ws_stream, _)) = connect_async(url.clone()).await {
-                let (mut write, mut read) = ws_stream.split();
+            if let Ok((mut ws_stream, _)) = connect_async(url.clone()).await {
+                // 구독 메시지 수정 - 일봉 데이터에 더 적합한 설정
+                let subscribe_message = r#"[
+                    {"ticket":"test"},
+                    {"type":"ticker","codes":["KRW-BTC"]},
+                    {"type":"trade","codes":["KRW-BTC"]}
+                ]"#;
+                
+                if let Err(_) = ws_stream.send(ME::Text(subscribe_message.to_string())).await {
+                    continue;
+                }
 
-                let subscribe_msg = json!([{
-                    "ticket": "UNIQUE_TICKET",
-                    "type": "trade",
-                    "codes": ["KRW-BTC"],
-                }]);
-
-                if write.send(subscribe_msg.to_string().into()).await.is_ok() {
-                    while let Some(Ok(msg)) = read.next().await {
-                        if let Ok(_data) = serde_json::from_slice::<UpbitWebSocketData>(&msg.into_data()) {
-                            yield Message::AddCandlestick;
-                            println!("{:?}",_data);
+                while let Some(Ok(message)) = ws_stream.next().await {
+                    match message {
+                        ME::Binary(bin_data) => {
+                            if let Ok(trade) = serde_json::from_str::<UpbitTrade>(&String::from_utf8_lossy(&bin_data)) {
+                                // 거래 시각 로깅
+                                println!("Trade received - Timestamp: {}, Price: {}", 
+                                    trade.timestamp, 
+                                    trade.trade_price
+                                );
+                                yield Message::AddCandlestick((trade.timestamp, trade));
+                            }
                         }
+                        _ => continue,
                     }
                 }
             }
             yield Message::Error;
-            // 연결이 끊기면 잠시 대기 후 재시도
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
@@ -200,52 +236,83 @@ impl Counter {
         ];
 
         // 버튼 스타일 수정
-        let add_button = button(text("Add Candlestick").size(16)).padding(10);
+        let add_button = button(text("Add Candlestick").size(8)).padding(10);
+        let add_button2 = button(text("Add Candlestick").size(8)).padding(10);
 
-        let remove_button = button(text("Remove Candlestick").size(16)).padding(10);
+        let remove_button = button(text("Remove Candlestick").size(8)).padding(10);
 
-        let styled_pick_list =
-            pick_list(fruits, self.selected_option, Message::FruitSelected).padding(10);
+        let styled_pick_list = pick_list(fruits, self.selected_option, Message::FruitSelected)
+            .text_size(10)
+            .padding(10);
 
         Column::new()
-            .push(container(text("Candlestick Chart").size(24)).padding(20))
             .push(
                 Row::new()
-                    .spacing(10)
+                    .spacing(5)
                     .push(styled_pick_list)
                     .push(add_button)
                     .push(remove_button),
             )
             .push(
-                container(canvas)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding(20),
+                Row::new()
+                    .push(
+                        container(canvas)
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .padding(20),
+                    )
+                    .push(
+                        container(add_button2)
+                            .width(300.)
+                            .height(Length::Fill)
+                            .padding(20),
+                    ),
             )
             .into()
     }
 
+    
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::AddCandlestick => {
-                let last_close = self
-                    .candlesticks
-                    .values()
-                    .last()
-                    .map(|c| c.close)
-                    .unwrap_or(100.0);
+            Message::AddCandlestick(trade) => {
+                let (timestamp, trade_data) = trade;
+                
+                // 일봉 기준으로 timestamp 조정 (UTC 기준 00:00:00)
+                let day_timestamp = timestamp - (timestamp % (24 * 60 * 60 * 1000));
+                let trade_price = trade_data.trade_price as f32;
 
-                let new_timestamp = self.candlesticks.keys().last().map(|k| k + 1).unwrap_or(0);
+                if let Some(candlestick) = self.candlesticks.get_mut(&day_timestamp) {
+                    // 기존 캔들 업데이트
+                    candlestick.high = candlestick.high.max(trade_price);
+                    candlestick.low = candlestick.low.min(trade_price);
+                    candlestick.close = trade_price;
 
-                self.candlesticks.insert(
-                    new_timestamp,
-                    Candlestick {
-                        open: last_close,
-                        close: last_close,
-                        high: last_close,
-                        low: last_close,
-                    },
-                );
+                    println!("Updated candlestick: Day: {}, Open: {}, High: {}, Low: {}, Close: {}", 
+                        day_timestamp,
+                        candlestick.open,
+                        candlestick.high,
+                        candlestick.low,
+                        candlestick.close
+                    );
+                } else {
+                    // 새로운 일봉 캔들 생성
+                    let new_candlestick = Candlestick {
+                        open: trade_price,
+                        high: trade_price,
+                        low: trade_price,
+                        close: trade_price,
+                    };
+                    println!("New candlestick: Day: {}, Price: {}", day_timestamp, trade_price);
+                    self.candlesticks.insert(day_timestamp, new_candlestick);
+                }
+
+                // 캔들 개수 제한 (예: 최근 100일)
+                while self.candlesticks.len() > 100 {
+                    if let Some(first_key) = self.candlesticks.keys().next().copied() {
+                        self.candlesticks.remove(&first_key);
+                    }
+                }
+
                 self.auto_scroll = true;
             }
             Message::RemoveCandlestick => {
@@ -258,9 +325,7 @@ impl Counter {
                 self.selected_option = Some(fruit);
             }
             Message::Error => {
-                // WebSocket 에러 처리
                 println!("WebSocket connection error");
-                // 필요한 경우 재연결 로직 추가
             }
         }
     }
@@ -393,12 +458,15 @@ fn fetch_daily_candles() -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::erro
         let url = "https://api.upbit.com/v1/candles/days?market=KRW-BTC&count=200";
         let response = reqwest::get(url).await?.json::<Vec<UpbitCandle>>().await?;
 
-        // UpbitCandle을 우리의 Candlestick 형식으로 변환
+        println!("Fetched {} daily candles", response.len());
+
+        // UpbitCandle을 Candlestick으로 변환
         Ok(response
             .into_iter()
             .map(|candle| {
+                let day_timestamp = candle.timestamp - (candle.timestamp % (24 * 60 * 60 * 1000));
                 (
-                    candle.timestamp, // BTreeMap의 키로 timestamp 사용
+                    day_timestamp,
                     Candlestick {
                         open: candle.opening_price,
                         close: candle.trade_price,
@@ -413,10 +481,11 @@ fn fetch_daily_candles() -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::erro
 fn main() -> iced::Result {
     iced::application("Candlestick Chart", Counter::update, Counter::view)
         .subscription(Counter::subscription)
+        .window_size(Size::new(1980., 1080.))
         .run()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct UpbitCandle {
     candle_acc_trade_price: f32,  // 누적 거래 금액
     candle_acc_trade_volume: f32, // 누적 거래량
