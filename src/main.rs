@@ -15,10 +15,11 @@ use iced::{
             event::{self, Event},
             Canvas, Program,
         },
-        column, container, pick_list, text, Column, Container, PickList,
+        column, container, pick_list, text, Column, Container, PickList, Text,
     },
     Color, Element, Length, Point, Rectangle, Size, Subscription,
 };
+use std::collections::HashMap;
 
 use async_stream::stream;
 use reqwest::Url;
@@ -44,7 +45,8 @@ struct CoinInfo {
 pub enum Message {
     AddCandlestick((u64, UpbitTrade)), // UpbitTrade 데이터 포함
     RemoveCandlestick,
-    FruitSelected(Fruit),
+    SelectCoin(String),                // 코인 선택 메시지 추가
+    UpdateCoinPrice(String, f64, f64), // 코인 가격 업데이트
     Error,
 }
 
@@ -57,8 +59,9 @@ enum Fruit {
 }
 struct Counter {
     timer_enabled: bool,
-    candlesticks: BTreeMap<u64, Candlestick>, // Vec에서 BTreeMap으로 변경
-    selected_option: Option<Fruit>,
+    candlesticks: BTreeMap<u64, Candlestick>,
+    selected_coin: String,                // 현재 선택된 코인
+    coin_list: HashMap<String, CoinInfo>, // 코인 목록
     auto_scroll: bool,
 }
 
@@ -107,24 +110,38 @@ impl std::fmt::Display for Fruit {
 }
 impl Default for Counter {
     fn default() -> Self {
-        let candlesticks = fetch_daily_candles().unwrap_or_else(|_| {
-            let mut default_map = BTreeMap::new();
-            default_map.insert(
-                1731915812548,
-                Candlestick {
-                    open: 100.0,
-                    close: 110.0,
-                    high: 115.0,
-                    low: 95.0,
+        let mut coin_list = HashMap::new();
+        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT"] {
+            coin_list.insert(
+                symbol.to_string(),
+                CoinInfo {
+                    symbol: format!("KRW-{}", symbol),
+                    name: symbol.to_string(),
+                    price: 0.0,
+                    change_percent: 0.0,
                 },
             );
-            default_map
-        });
+        }
+
+        // let candlesticks = fetch_daily_candles().unwrap_or_else(|_| {
+        //     let mut default_map = BTreeMap::new();
+        //     default_map.insert(
+        //         1731915812548,
+        //         Candlestick {
+        //             open: 100.0,
+        //             close: 110.0,
+        //             high: 115.0,
+        //             low: 95.0,
+        //         },
+        //     );
+        //     default_map
+        // });
 
         Self {
-            candlesticks, // BTreeMap 직접 사용
+            candlesticks: fetch_daily_candles("KRW-BTC").unwrap_or_default(),
             timer_enabled: true,
-            selected_option: None,
+            selected_coin: "BTC".to_string(),
+            coin_list,
             auto_scroll: true,
         }
     }
@@ -193,7 +210,7 @@ fn upbit_connection() -> impl Stream<Item = Message> {
                     {"type":"ticker","codes":["KRW-BTC"]},
                     {"type":"trade","codes":["KRW-BTC"]}
                 ]"#;
-                
+
                 if let Err(_) = ws_stream.send(ME::Text(subscribe_message.to_string())).await {
                     continue;
                 }
@@ -203,8 +220,8 @@ fn upbit_connection() -> impl Stream<Item = Message> {
                         ME::Binary(bin_data) => {
                             if let Ok(trade) = serde_json::from_str::<UpbitTrade>(&String::from_utf8_lossy(&bin_data)) {
                                 // 거래 시각 로깅
-                                println!("Trade received - Timestamp: {}, Price: {}", 
-                                    trade.timestamp, 
+                                println!("Trade received - Timestamp: {}, Price: {}",
+                                    trade.timestamp,
                                     trade.trade_price
                                 );
                                 yield Message::AddCandlestick((trade.timestamp, trade));
@@ -224,16 +241,32 @@ impl Counter {
         Subscription::run(upbit_connection)
     }
     pub fn view(&self) -> Element<Message> {
+        let coin_list = Column::new().spacing(2).width(Length::Fixed(200.0));
+
+        let coin_list = self
+            .coin_list
+            .iter()
+            .fold(coin_list, |column, (symbol, info)| {
+                column.push(
+                    button(
+                        Container::new(
+                            Row::new()
+                                .spacing(10)
+                                .push(Text::new(&*info.name))
+                                .push(Text::new(info.change_percent.to_string())),
+                            // .push(text(&change_text).size(14)),
+                        )
+                        // .style()
+                        .width(Length::Fill)
+                        .padding(10),
+                    )
+                    .padding(10)
+                    .on_press(Message::SelectCoin(symbol.clone())),
+                )
+            });
         let canvas = Canvas::new(Chart::new(self.candlesticks.clone()))
             .width(Length::Fill)
             .height(Length::from(500));
-
-        let fruits = [
-            Fruit::Apple,
-            Fruit::Orange,
-            Fruit::Strawberry,
-            Fruit::Tomato,
-        ];
 
         // 버튼 스타일 수정
         let add_button = button(text("Add Candlestick").size(8)).padding(10);
@@ -241,20 +274,21 @@ impl Counter {
 
         let remove_button = button(text("Remove Candlestick").size(8)).padding(10);
 
-        let styled_pick_list = pick_list(fruits, self.selected_option, Message::FruitSelected)
-            .text_size(10)
-            .padding(10);
+        // let styled_pick_list = pick_list(fruits, self.selected_option, Message::FruitSelected)
+        //     .text_size(10)
+        //     .padding(10);
 
         Column::new()
             .push(
                 Row::new()
                     .spacing(5)
-                    .push(styled_pick_list)
+                    // .push(styled_pick_list)
                     .push(add_button)
                     .push(remove_button),
             )
             .push(
                 Row::new()
+                    .push(coin_list)
                     .push(
                         container(canvas)
                             .width(Length::Fill)
@@ -271,12 +305,25 @@ impl Counter {
             .into()
     }
 
-    
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::SelectCoin(symbol) => {
+                self.selected_coin = symbol.clone();
+                // 새로운 코인의 캔들스틱 데이터 불러오기
+                if let Ok(candles) = fetch_daily_candles(&format!("KRW-{}", symbol)) {
+                    self.candlesticks = candles;
+                }
+                self.auto_scroll = true;
+            }
+            Message::UpdateCoinPrice(symbol, price, change) => {
+                if let Some(info) = self.coin_list.get_mut(&symbol) {
+                    info.price = price;
+                    info.change_percent = change;
+                }
+            }
             Message::AddCandlestick(trade) => {
                 let (timestamp, trade_data) = trade;
-                
+
                 // 일봉 기준으로 timestamp 조정 (UTC 기준 00:00:00)
                 let day_timestamp = timestamp - (timestamp % (24 * 60 * 60 * 1000));
                 let trade_price = trade_data.trade_price as f32;
@@ -287,7 +334,8 @@ impl Counter {
                     candlestick.low = candlestick.low.min(trade_price);
                     candlestick.close = trade_price;
 
-                    println!("Updated candlestick: Day: {}, Open: {}, High: {}, Low: {}, Close: {}", 
+                    println!(
+                        "Updated candlestick: Day: {}, Open: {}, High: {}, Low: {}, Close: {}",
                         day_timestamp,
                         candlestick.open,
                         candlestick.high,
@@ -302,7 +350,10 @@ impl Counter {
                         low: trade_price,
                         close: trade_price,
                     };
-                    println!("New candlestick: Day: {}, Price: {}", day_timestamp, trade_price);
+                    println!(
+                        "New candlestick: Day: {}, Price: {}",
+                        day_timestamp, trade_price
+                    );
                     self.candlesticks.insert(day_timestamp, new_candlestick);
                 }
 
@@ -321,9 +372,7 @@ impl Counter {
                 }
                 self.auto_scroll = true;
             }
-            Message::FruitSelected(fruit) => {
-                self.selected_option = Some(fruit);
-            }
+
             Message::Error => {
                 println!("WebSocket connection error");
             }
@@ -451,22 +500,23 @@ impl<Message> Program<Message> for Chart {
         vec![frame.into_geometry()]
     }
 }
-fn fetch_daily_candles() -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
+fn fetch_daily_candles(
+    market: &str,
+) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
-        let url = "https://api.upbit.com/v1/candles/days?market=KRW-BTC&count=200";
-        let response = reqwest::get(url).await?.json::<Vec<UpbitCandle>>().await?;
+        let url = format!(
+            "https://api.upbit.com/v1/candles/days?market={}&count=200",
+            market
+        );
+        let response = reqwest::get(&url).await?.json::<Vec<UpbitCandle>>().await?;
 
-        println!("Fetched {} daily candles", response.len());
-
-        // UpbitCandle을 Candlestick으로 변환
         Ok(response
             .into_iter()
             .map(|candle| {
-                let day_timestamp = candle.timestamp - (candle.timestamp % (24 * 60 * 60 * 1000));
                 (
-                    day_timestamp,
+                    candle.timestamp,
                     Candlestick {
                         open: candle.opening_price,
                         close: candle.trade_price,
@@ -478,6 +528,7 @@ fn fetch_daily_candles() -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::erro
             .collect())
     })
 }
+
 fn main() -> iced::Result {
     iced::application("Candlestick Chart", Counter::update, Counter::view)
         .subscription(Counter::subscription)
