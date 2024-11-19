@@ -1,3 +1,5 @@
+#![allow(non_utf8_strings)]
+
 use futures_util::Stream;
 use iced::futures::{channel::mpsc, SinkExt, StreamExt};
 use iced::time::{self, Duration, Instant};
@@ -11,9 +13,10 @@ use iced::{
             event::{self, Event},
             Canvas, Program,
         },
-        column, container, pick_list, text, Column, Container, PickList, Space, Text,
+        checkbox, column, container, pick_list, text, text_input, Checkbox, Column, Container,
+        PickList, Space, Text,
     },
-    Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription,
+    Color, Element, Font, Length, Pixels, Point, Rectangle, Size, Subscription,
 };
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -41,6 +44,10 @@ pub enum Message {
     Error,
     WebSocketInit(mpsc::Sender<String>),
     UpdatePrice(String, f64, f64),
+    ToggleMA5,
+    ToggleMA10,
+    ToggleMA20,
+    ToggleMA200,
 }
 
 struct RTarde {
@@ -51,15 +58,22 @@ struct RTarde {
     coin_list: HashMap<String, CoinInfo>,
     auto_scroll: bool,
     ws_sender: Option<mpsc::Sender<String>>,
+    show_ma5: bool,   // 5일 이동평균선 표시 여부
+    show_ma10: bool,  // 10일 이동평균선 표시 여부
+    show_ma20: bool,  // 20일 이동평균선 표시 여부
+    show_ma200: bool, // 200일 이동평균선 표시 여부
 }
 
+// Candlestick 구조체 업데이트
 #[derive(Debug, Clone)]
 struct Candlestick {
     open: f32,
     close: f32,
     high: f32,
     low: f32,
+    volume: f32, // 거래량 필드 추가
 }
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CandleType {
     Minute1,
@@ -99,10 +113,30 @@ struct Chart {
     candlesticks: BTreeMap<u64, Candlestick>,
     state: ChartState,
     price_range: Option<(f32, f32)>,
-    candle_type: CandleType, // 추가
+    candle_type: CandleType,
+    show_ma5: bool,
+    show_ma10: bool,
+    show_ma20: bool,
+    show_ma200: bool,
+    ma5_values: BTreeMap<u64, f32>,
+    ma10_values: BTreeMap<u64, f32>,
+    ma20_values: BTreeMap<u64, f32>,
+    ma200_values: BTreeMap<u64, f32>,
 }
 impl Chart {
-    fn new(candlesticks: BTreeMap<u64, Candlestick>, candle_type: CandleType) -> Self {
+    fn new(
+        candlesticks: BTreeMap<u64, Candlestick>,
+        candle_type: CandleType,
+        show_ma5: bool,
+        show_ma10: bool,
+        show_ma20: bool,
+        show_ma200: bool,
+    ) -> Self {
+        let ma5_values = calculate_moving_average(&candlesticks, 5);
+        let ma10_values = calculate_moving_average(&candlesticks, 10);
+        let ma20_values = calculate_moving_average(&candlesticks, 20);
+        let ma200_values = calculate_moving_average(&candlesticks, 200);
+
         let price_range = if candlesticks.is_empty() {
             Some((0.0, 100.0))
         } else {
@@ -110,16 +144,21 @@ impl Chart {
                 (acc.0.min(c.low), acc.1.max(c.high))
             });
 
-            let margin_percent = match max {
-                p if p >= 10_000_000.0 => 0.001,
-                p if p >= 1_000_000.0 => 0.002,
-                p if p >= 100_000.0 => 0.005,
-                p if p >= 10_000.0 => 0.01,
-                _ => 0.02,
-            };
+            // 이동평균선 값들도 고려하여 가격 범위 계산
+            let ma_min = [&ma5_values, &ma10_values, &ma20_values, &ma200_values]
+                .iter()
+                .filter(|ma| !ma.is_empty())
+                .flat_map(|ma| ma.values())
+                .fold(min, |acc, &x| acc.min(x));
 
-            let margin = (max - min) * margin_percent;
-            Some((min - margin, max + margin))
+            let ma_max = [&ma5_values, &ma10_values, &ma20_values, &ma200_values]
+                .iter()
+                .filter(|ma| !ma.is_empty())
+                .flat_map(|ma| ma.values())
+                .fold(max, |acc, &x| acc.max(x));
+
+            let margin = (ma_max - ma_min) * 0.1;
+            Some((ma_min - margin, ma_max + margin))
         };
 
         Self {
@@ -129,7 +168,15 @@ impl Chart {
                 ..ChartState::default()
             },
             price_range,
-            candle_type, // 추가
+            candle_type,
+            show_ma5,
+            show_ma10,
+            show_ma20,
+            show_ma200,
+            ma5_values,
+            ma10_values,
+            ma20_values,
+            ma200_values,
         }
     }
 }
@@ -156,6 +203,10 @@ impl Default for RTarde {
             coin_list,
             auto_scroll: true,
             ws_sender: None,
+            show_ma5: false,
+            show_ma10: false,
+            show_ma20: false,
+            show_ma200: false,
         }
     }
 }
@@ -174,6 +225,33 @@ struct UpbitTrade {
     change: String,
     change_price: f64,
     stream_type: String,
+}
+fn calculate_moving_average(
+    candlesticks: &BTreeMap<u64, Candlestick>,
+    period: usize,
+) -> BTreeMap<u64, f32> {
+    let mut result = BTreeMap::new();
+    if period == 0 || candlesticks.is_empty() {
+        return result;
+    }
+
+    // 모든 캔들스틱의 timestamp와 종가를 벡터로 변환
+    let data: Vec<(u64, f32)> = candlesticks
+        .iter()
+        .map(|(&timestamp, candle)| (timestamp, candle.close))
+        .collect();
+
+    // 이동 윈도우로 평균 계산
+    for i in (period - 1)..data.len() {
+        let sum: f32 = data[i + 1 - period..=i]
+            .iter()
+            .map(|(_, price)| price)
+            .sum();
+        let avg = sum / period as f32;
+        result.insert(data[i].0, avg);
+    }
+
+    result
 }
 
 fn upbit_connection() -> impl Stream<Item = Message> {
@@ -247,6 +325,26 @@ impl RTarde {
         Subscription::run(upbit_connection)
     }
     pub fn view(&self) -> Element<Message> {
+        let ma_controls = Container::new(
+            Column::new()
+                .spacing(5)
+                .push(
+                    Row::new()
+                        .spacing(10)
+                        .push(checkbox("MA5", self.show_ma5).on_toggle(|_| Message::ToggleMA5))
+                        .push(checkbox("MA10", self.show_ma10).on_toggle(|_| Message::ToggleMA10)),
+                )
+                .push(
+                    Row::new()
+                        .spacing(10)
+                        .push(checkbox("MA20", self.show_ma20).on_toggle(|_| Message::ToggleMA20))
+                        .push(
+                            checkbox("MA200", self.show_ma200).on_toggle(|_| Message::ToggleMA200),
+                        ),
+                ),
+        )
+        .padding(10);
+
         let coins: Vec<String> = self.coin_list.keys().cloned().collect();
 
         let coin_picker = pick_list(coins, Some(self.selected_coin.clone()), Message::SelectCoin)
@@ -275,40 +373,235 @@ impl RTarde {
         .width(Length::Fixed(100.0));
 
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            let price_text = format!("현재가: {:.2} KRW", info.price);
-            let change_text = format!("변동률: {:.2}%", info.change_percent);
+            let font_bytes = include_bytes!("../assets/font/NanumGothic-Bold.ttf");
+            let custom_font = Font::with_name("NotoSansCJK");
+
+            // 가격 변화 화살표 (상승/하락)
+            let price_direction = if info.change_percent >= 0.0 {
+                "▲"
+            } else {
+                "▼"
+            };
+
             let change_color = if info.change_percent >= 0.0 {
                 Color::from_rgb(0.8, 0.0, 0.0)
             } else {
                 Color::from_rgb(0.0, 0.0, 0.8)
             };
 
-            Row::new()
-                .spacing(20)
-                .push(Text::new(price_text))
-                .push(Text::new(change_text).color(change_color))
+            Column::new()
+                .spacing(10)
+                .push(
+                    // 코인 이름과 심볼
+                    Container::new(
+                        Column::new()
+                            .push(
+                                Text::new(&info.name)
+                                    .size(28)
+                                    .font(custom_font)
+                                    .width(Length::Fill),
+                            )
+                            .push(
+                                Text::new(&info.symbol)
+                                    .size(14)
+                                    .font(custom_font)
+                                    .color(Color::from_rgb(0.5, 0.5, 0.5)),
+                            ),
+                    )
+                    .padding(10)
+                    .width(Length::Fill),
+                )
+                .push(
+                    // 가격 정보
+                    Container::new(
+                        Column::new()
+                            .spacing(5)
+                            .push(
+                                // 현재가
+                                Text::new(format!("{:.0} KRW", info.price))
+                                    .size(32)
+                                    .font(custom_font)
+                                    .color(change_color),
+                            )
+                            .push(
+                                // 변동률
+                                Row::new()
+                                    .spacing(5)
+                                    .push(Text::new(price_direction).color(change_color))
+                                    .push(
+                                        Text::new(format!("{:.2}%", info.change_percent.abs()))
+                                            .color(change_color),
+                                    ),
+                            ),
+                    )
+                    .padding(15)
+                    // .style(iced::theme::Container::Custom(Box::new(|theme| {
+                    //     iced::theme::Container {
+                    //         background: Some(iced::Background::Color(Color::from_rgb(
+                    //             0.95, 0.95, 0.95,
+                    //         ))),
+                    //         border_radius: 8.0.into(),
+                    //         border_width: 1.0,
+                    //         border_color: Color::from_rgb(0.9, 0.9, 0.9),
+                    //         text_color: None,
+                    //     }
+                    // })))
+                    .width(Length::Fill),
+                )
+                .push(
+                    // 24시간 거래량 등 추가 정보를 위한 공간
+                    Container::new(
+                        Column::new()
+                            .spacing(8)
+                            .push(
+                                Row::new()
+                                    .spacing(5)
+                                    .push(
+                                        Text::new("24H 고가")
+                                            .size(14)
+                                            .color(Color::from_rgb(0.5, 0.5, 0.5)),
+                                    )
+                                    .push(
+                                        Text::new(format!("{:.0} KRW", info.price * 1.1)) // 예시 데이터
+                                            .size(14),
+                                    ),
+                            )
+                            .push(
+                                Row::new()
+                                    .spacing(5)
+                                    .push(
+                                        Text::new("24H 저가")
+                                            .size(14)
+                                            .color(Color::from_rgb(0.5, 0.5, 0.5)),
+                                    )
+                                    .push(
+                                        Text::new(format!("{:.0} KRW", info.price * 0.9)) // 예시 데이터
+                                            .size(14),
+                                    ),
+                            ),
+                    )
+                    .padding(10)
+                    .width(Length::Fill),
+                )
         } else {
-            Row::new().push(Text::new("로딩중..."))
+            Column::new().push(Text::new("로딩중..."))
         };
 
         // 수정된 부분: Chart::new()에 selected_candle_type 전달
         let canvas = Canvas::new(Chart::new(
             self.candlesticks.clone(),
             self.selected_candle_type.clone(),
+            self.show_ma5,   // 5일 이동평균선 표시 여부
+            self.show_ma10,  // 10일 이동평균선 표시 여부
+            self.show_ma20,  // 20일 이동평균선 표시 여부
+            self.show_ma200, // 200일 이동평균선 표시 여부
         ))
         .width(iced::Fill)
         .height(Length::from(500));
 
-        let left_side_bar = Column::new().push(current_coin_info);
-        let right_side_bar = Column::new();
-
+        let left_side_bar = Column::new()
+            .spacing(20)
+            .padding(20)
+            .push(current_coin_info);
+        let right_side_bar = Column::new()
+            .spacing(20)
+            .padding(20)
+            .push(
+                Container::new(Text::new("주문하기").size(24))
+                    .width(Length::Fill)
+                    .center_x(0),
+            )
+            .push(
+                Column::new()
+                    .spacing(10)
+                    .push(Text::new("주문 유형").size(16))
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(
+                                button(Text::new("시장가 매수"))
+                                    // .style(iced::theme::Button::Primary)
+                                    .width(Length::Fill),
+                            )
+                            .push(
+                                button(Text::new("시장가 매도"))
+                                    // .style(iced::theme::Button::Secondary)
+                                    .width(Length::Fill),
+                            ),
+                    ),
+            )
+            .push(
+                Column::new()
+                    .spacing(10)
+                    .push(Text::new("지정가 주문").size(16))
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(text_input("가격을 입력하세요...", ""))
+                            .push(Text::new("KRW")),
+                    )
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(text_input("수량을 입력하세요...", ""))
+                            .push(Text::new(self.selected_coin.clone())),
+                    )
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(
+                                button(Text::new("지정가 매수"))
+                                    // .style(iced::theme::Button::Primary)
+                                    .width(Length::Fill),
+                            )
+                            .push(
+                                button(Text::new("지정가 매도"))
+                                    // .style(iced::theme::Button::Secondary)
+                                    .width(Length::Fill),
+                            ),
+                    ),
+            )
+            .push(
+                Column::new()
+                    .spacing(10)
+                    .push(Text::new("주문 비율").size(16))
+                    .push(
+                        Row::new()
+                            .spacing(5)
+                            .push(button(Text::new("10%")).width(Length::Fill))
+                            .push(button(Text::new("25%")).width(Length::Fill))
+                            .push(button(Text::new("50%")).width(Length::Fill))
+                            .push(button(Text::new("100%")).width(Length::Fill)),
+                    ),
+            )
+            .push(Space::with_height(Length::Fill))
+            .push(
+                Container::new(
+                    Column::new()
+                        .spacing(10)
+                        .push(Text::new("보유자산").size(16))
+                        .push(
+                            Row::new()
+                                .spacing(10)
+                                .push(Text::new("KRW"))
+                                .push(Text::new("1,000,000").size(16)),
+                        )
+                        .push(
+                            Row::new()
+                                .spacing(10)
+                                .push(Text::new(&self.selected_coin))
+                                .push(Text::new("0.0").size(16)),
+                        ),
+                ), // .style(iced::theme::Container::Box),
+            );
         Column::new()
             // .spacing(20)
             .push(
                 Row::new()
                     // .spacing(20)
                     .push(coin_picker)
-                    .push(candle_type_picker),
+                    .push(candle_type_picker)
+                    .push(ma_controls),
             )
             .push(
                 Row::new()
@@ -322,6 +615,10 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::ToggleMA5 => self.show_ma5 = !self.show_ma5,
+            Message::ToggleMA10 => self.show_ma10 = !self.show_ma10,
+            Message::ToggleMA20 => self.show_ma20 = !self.show_ma20,
+            Message::ToggleMA200 => self.show_ma200 = !self.show_ma200,
             Message::SelectCandleType(candle_type) => {
                 println!("Changing candle type to: {}", candle_type);
                 self.selected_candle_type = candle_type.clone();
@@ -429,11 +726,12 @@ impl RTarde {
                             high: trade_price,
                             low: trade_price,
                             close: trade_price,
+                            volume: trade_data.trade_volume as f32, // 초기 거래량 설정
                         };
                         self.candlesticks.insert(candle_timestamp, new_candlestick);
                         println!(
-                            "New candlestick at: {} price: {}",
-                            candle_timestamp, trade_price
+                            "New candlestick at: {} price: {}, volume: {}",
+                            candle_timestamp, trade_price, trade_data.trade_volume
                         );
 
                         // 오래된 캔들 제거
@@ -448,7 +746,11 @@ impl RTarde {
                             current_candle.high = current_candle.high.max(trade_price);
                             current_candle.low = current_candle.low.min(trade_price);
                             current_candle.close = trade_price;
-                            println!("Updated candlestick: close {}", trade_price);
+                            current_candle.volume += trade_data.trade_volume as f32; // 거래량 누적
+                            println!(
+                                "Updated candlestick: close {}, volume {}",
+                                trade_price, current_candle.volume
+                            );
                         }
                     }
                 } else {
@@ -458,6 +760,7 @@ impl RTarde {
                         high: trade_price,
                         low: trade_price,
                         close: trade_price,
+                        volume: trade_data.trade_volume as f32, // 초기 거래량 설정
                     };
                     self.candlesticks.insert(candle_timestamp, new_candlestick);
                 }
@@ -533,6 +836,71 @@ impl<Message> Program<Message> for Chart {
         if self.candlesticks.is_empty() {
             return vec![frame.into_geometry()];
         }
+        let (mut min_price, mut max_price) = self
+            .candlesticks
+            .values()
+            .fold((f32::MAX, f32::MIN), |acc, c| {
+                (acc.0.min(c.low), acc.1.max(c.high))
+            });
+
+        // 이동평균선의 최소/최대값도 고려
+        let ma_values = [
+            (self.show_ma5, &self.ma5_values),
+            (self.show_ma10, &self.ma10_values),
+            (self.show_ma20, &self.ma20_values),
+            (self.show_ma200, &self.ma200_values),
+        ];
+
+        for (show, values) in ma_values.iter() {
+            if *show && !values.is_empty() {
+                for &ma_value in values.values() {
+                    min_price = min_price.min(ma_value);
+                    max_price = max_price.max(ma_value);
+                }
+            }
+        }
+
+        // 여유 공간 추가
+        let price_margin = (max_price - min_price) * 0.1;
+        min_price -= price_margin;
+        max_price += price_margin;
+
+        // 이동평균선 그리기
+        let ma_lines = [
+            (
+                self.show_ma5,
+                &self.ma5_values,
+                Color::from_rgb(1.0, 1.0, 0.0),
+            ), // 노란색
+            (
+                self.show_ma10,
+                &self.ma10_values,
+                Color::from_rgb(0.0, 1.0, 0.0),
+            ), // 녹색
+            (
+                self.show_ma20,
+                &self.ma20_values,
+                Color::from_rgb(1.0, 0.0, 1.0),
+            ), // 보라색
+            (
+                self.show_ma200,
+                &self.ma200_values,
+                Color::from_rgb(0.0, 1.0, 1.0),
+            ), // 하늘색
+        ];
+
+        // 여백 설정
+        let left_margin = 50.0;
+        let right_margin = 20.0;
+        let top_margin = 20.0;
+        let bottom_margin = 50.0;
+
+        // 거래량 차트의 높이 설정
+        let volume_height = 100.0;
+        let price_chart_height = bounds.height - volume_height - bottom_margin - top_margin - 20.0; // 차트 사이 간격 추가
+                                                                                                    // 스케일링 계산
+        let price_diff = (max_price - min_price).max(f32::EPSILON);
+        let y_scale = (price_chart_height / price_diff).min(1e6);
 
         // 배경 그리기
         frame.fill_rectangle(
@@ -541,13 +909,19 @@ impl<Message> Program<Message> for Chart {
             Color::from_rgb(0.1, 0.1, 0.15),
         );
 
-        // 가격 범위 계산
+        // 가격 및 거래량 범위 계산
         let (mut min_price, mut max_price) = self
             .candlesticks
             .values()
             .fold((f32::MAX, f32::MIN), |acc, c| {
                 (acc.0.min(c.low), acc.1.max(c.high))
             });
+
+        let max_volume = self
+            .candlesticks
+            .values()
+            .map(|c| c.volume)
+            .fold(0.0, f32::max);
 
         // 마진 추가
         let margin = (max_price - min_price) * 0.1;
@@ -556,37 +930,34 @@ impl<Message> Program<Message> for Chart {
 
         // 스케일링 계산
         let price_diff = (max_price - min_price).max(f32::EPSILON);
-        let y_scale = ((bounds.height - 40.0) / price_diff).min(1e6);
+        let y_scale = (price_chart_height / price_diff).min(1e6);
+        let volume_scale = (volume_height / max_volume).min(1e6);
 
         // 캔들스틱 크기 계산
         let candle_count = self.candlesticks.len() as f32;
-        let available_width = bounds.width - 40.0;
-
-        // 봉 타입에 따른 캔들스틱 크기 조정
+        let available_width = bounds.width - left_margin - right_margin;
         let fixed_candle_width = match self.candle_type {
             CandleType::Minute1 => (available_width / candle_count).min(8.0),
-            CandleType::Minute3 => (available_width / candle_count).min(10.0), // 크기 조정
+            CandleType::Minute3 => (available_width / candle_count).min(10.0),
             CandleType::Day => (available_width / candle_count).min(15.0),
         };
         let body_width = fixed_candle_width * 0.8;
 
-        // 그리드 라인
+        // 가격 차트 그리드 라인
         for i in 0..=10 {
-            let y = bounds.height * (i as f32 / 10.0);
-            let price = min_price + (price_diff * (i as f32 / 10.0));
+            let y = top_margin + (price_chart_height * (i as f32 / 10.0));
+            let price = max_price - (price_diff * (i as f32 / 10.0));
 
-            // 가로 그리드 라인
             frame.stroke(
                 &canvas::Path::new(|p| {
-                    p.move_to(Point::new(30.0, y));
-                    p.line_to(Point::new(bounds.width - 10.0, y));
+                    p.move_to(Point::new(left_margin, y));
+                    p.line_to(Point::new(bounds.width - right_margin, y));
                 }),
                 canvas::Stroke::default()
                     .with_color(Color::from_rgb(0.2, 0.2, 0.25))
                     .with_width(1.0),
             );
 
-            // 가격 레이블
             frame.fill_text(canvas::Text {
                 content: format!("{:.0}", price),
                 position: Point::new(5.0, y - 5.0),
@@ -596,16 +967,51 @@ impl<Message> Program<Message> for Chart {
             });
         }
 
-        // 캔들스틱 그리기
-        for (i, (timestamp, candlestick)) in self.candlesticks.iter().enumerate() {
-            let x = 30.0 + (i as f32 * fixed_candle_width) + state.offset;
+        // 거래량 차트 영역 구분선
+        let volume_area_start = top_margin + price_chart_height + 10.0;
+        let volume_area_end = volume_area_start + volume_height;
+        frame.stroke(
+            &canvas::Path::new(|p| {
+                p.move_to(Point::new(left_margin, volume_area_start));
+                p.line_to(Point::new(bounds.width - right_margin, volume_area_start));
+            }),
+            canvas::Stroke::default()
+                .with_color(Color::from_rgb(0.3, 0.3, 0.3))
+                .with_width(1.0),
+        );
 
-            // 화면 밖의 캔들은 건너뛰기
+        // 거래량 차트 그리드 라인
+        for i in 0..=2 {
+            let y = volume_area_end - (volume_height * (i as f32 / 2.0)); // 위치를 뒤집음
+            let volume = max_volume * (i as f32 / 2.0);
+
+            frame.stroke(
+                &canvas::Path::new(|p| {
+                    p.move_to(Point::new(left_margin, y));
+                    p.line_to(Point::new(bounds.width - right_margin, y));
+                }),
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgb(0.2, 0.2, 0.25))
+                    .with_width(1.0),
+            );
+
+            frame.fill_text(canvas::Text {
+                content: format!("{:.0}", volume),
+                position: Point::new(5.0, y - 5.0),
+                color: Color::from_rgb(0.7, 0.7, 0.7),
+                size: Pixels(10.0),
+                ..canvas::Text::default()
+            });
+        }
+        // 캔들스틱과 거래량 바 그리기
+        for (i, (timestamp, candlestick)) in self.candlesticks.iter().enumerate() {
+            let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
+
             if x < -fixed_candle_width || x > bounds.width {
                 continue;
             }
 
-            // 시간 레이블 (10개 간격으로)
+            // 시간 레이블
             if i % 10 == 0 {
                 let time_str = match self.candle_type {
                     CandleType::Minute1 | CandleType::Minute3 => {
@@ -624,23 +1030,24 @@ impl<Message> Program<Message> for Chart {
 
                 frame.fill_text(canvas::Text {
                     content: time_str,
-                    position: Point::new(x, bounds.height - 5.0),
+                    position: Point::new(x - 15.0, bounds.height - bottom_margin + 15.0),
                     color: Color::from_rgb(0.7, 0.7, 0.7),
                     size: Pixels(10.0),
                     ..canvas::Text::default()
                 });
             }
 
-            let open_y = bounds.height - 20.0 - ((candlestick.open - min_price) * y_scale);
-            let close_y = bounds.height - 20.0 - ((candlestick.close - min_price) * y_scale);
-            let high_y = bounds.height - 20.0 - ((candlestick.high - min_price) * y_scale);
-            let low_y = bounds.height - 20.0 - ((candlestick.low - min_price) * y_scale);
-
             let color = if candlestick.close >= candlestick.open {
-                Color::from_rgb(0.8, 0.0, 0.0) // 상승 빨간색
+                Color::from_rgb(0.8, 0.0, 0.0)
             } else {
-                Color::from_rgb(0.0, 0.0, 0.8) // 하락 파란색
+                Color::from_rgb(0.0, 0.0, 0.8)
             };
+
+            // 캔들스틱 그리기
+            let open_y = top_margin + ((max_price - candlestick.open) * y_scale);
+            let close_y = top_margin + ((max_price - candlestick.close) * y_scale);
+            let high_y = top_margin + ((max_price - candlestick.high) * y_scale);
+            let low_y = top_margin + ((max_price - candlestick.low) * y_scale);
 
             // 심지
             let center_x = x + (body_width / 2.0);
@@ -660,16 +1067,64 @@ impl<Message> Program<Message> for Chart {
                 Size::new(body_width, body_height),
                 color,
             );
-        }
 
+            // 거래량 바 그리기
+            // 거래량 바 그리기 부분
+            let volume_height = candlestick.volume * volume_scale;
+            let volume_color = if candlestick.close >= candlestick.open {
+                Color::from_rgba(0.8, 0.0, 0.0, 0.5)
+            } else {
+                Color::from_rgba(0.0, 0.0, 0.8, 0.5)
+            };
+
+            // 거래량 바의 시작점을 volume_area_end에서 시작하여 위로 그리기
+            frame.fill_rectangle(
+                Point::new(x, volume_area_end),
+                Size::new(body_width, -volume_height), // 음수 높이로 위 방향으로 그리기
+                volume_color,
+            );
+        }
+        for (show, values, color) in ma_lines.iter() {
+            if *show && !values.is_empty() {
+                let mut path_builder = canvas::path::Builder::new();
+                let mut first = true;
+
+                // timestamp를 정렬된 순서로 처리
+                let timestamps: Vec<_> = self.candlesticks.keys().collect();
+
+                for (i, &timestamp) in timestamps.iter().enumerate() {
+                    if let Some(&ma_price) = values.get(timestamp) {
+                        let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
+                        let y = top_margin + ((max_price - ma_price) * y_scale);
+
+                        if first {
+                            path_builder.move_to(Point::new(x, y));
+                            first = false;
+                        } else {
+                            path_builder.line_to(Point::new(x, y));
+                        }
+                    }
+                }
+
+                let path = path_builder.build();
+
+                frame.stroke(
+                    &path,
+                    canvas::Stroke::default().with_color(*color).with_width(1.5),
+                );
+            }
+        }
         vec![frame.into_geometry()]
     }
 }
 
 fn main() -> iced::Result {
+    let font_bytes = include_bytes!("../assets/font/NanumGothic-Bold.ttf");
+
     iced::application("Candlestick Chart", RTarde::update, RTarde::view)
         .subscription(RTarde::subscription)
         .window_size(Size::new(1980., 1080.))
+        .font(font_bytes)
         .run()
 }
 #[derive(Debug, Deserialize, Clone)]
@@ -735,15 +1190,15 @@ async fn fetch_candles_async(
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let url = match candle_type {
         CandleType::Minute1 => format!(
-            "https://api.upbit.com/v1/candles/minutes/1?market={}&count=100",
+            "https://api.upbit.com/v1/candles/minutes/1?market={}&count=1000",
             market
         ),
         CandleType::Minute3 => format!(
-            "https://api.upbit.com/v1/candles/minutes/3?market={}&count=100",
+            "https://api.upbit.com/v1/candles/minutes/3?market={}&count=1000",
             market
         ),
         CandleType::Day => format!(
-            "https://api.upbit.com/v1/candles/days?market={}&count=100",
+            "https://api.upbit.com/v1/candles/days?market={}&count=1000",
             market
         ),
     };
@@ -769,8 +1224,6 @@ async fn fetch_candles_async(
     let mut result: BTreeMap<u64, Candlestick> = match candle_type {
         CandleType::Minute1 | CandleType::Minute3 => {
             let candles: Vec<UpbitMinuteCandle> = serde_json::from_str(&text)?;
-
-            // 시간 순서대로 정렬 (오래된 순)
             let mut sorted_candles = candles;
             sorted_candles.sort_by_key(|c| c.timestamp);
 
@@ -790,6 +1243,7 @@ async fn fetch_candles_async(
                             high: candle.high_price as f32,
                             low: candle.low_price as f32,
                             close: candle.trade_price as f32,
+                            volume: candle.candle_acc_trade_volume as f32, // 거래량 추가
                         },
                     )
                 })
@@ -797,7 +1251,6 @@ async fn fetch_candles_async(
         }
         CandleType::Day => {
             let candles: Vec<UpbitCandle> = serde_json::from_str(&text)?;
-
             let mut sorted_candles = candles;
             sorted_candles.sort_by_key(|c| c.timestamp);
 
@@ -817,6 +1270,7 @@ async fn fetch_candles_async(
                             high: candle.high_price,
                             low: candle.low_price,
                             close: candle.trade_price,
+                            volume: candle.candle_acc_trade_volume, // 거래량 추가
                         },
                     )
                 })
