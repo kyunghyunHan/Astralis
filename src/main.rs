@@ -48,6 +48,7 @@ pub enum Message {
     SelectCoin(String),                // 코인 선택 메시지 추가
     UpdateCoinPrice(String, f64, f64), // 코인 가격 업데이트
     Error,
+    WebSocketInit(mpsc::Sender<String>), // 추가
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +64,7 @@ struct Counter {
     selected_coin: String,                // 현재 선택된 코인
     coin_list: HashMap<String, CoinInfo>, // 코인 목록
     auto_scroll: bool,
+    ws_sender: Option<mpsc::Sender<String>>, // 추가
 }
 
 #[derive(Debug, Clone)]
@@ -83,18 +85,45 @@ struct ChartState {
 }
 use serde_json::json;
 struct Chart {
-    candlesticks: BTreeMap<u64, Candlestick>, // Vec 에서 BTreeMap으로 변경
+    candlesticks: BTreeMap<u64, Candlestick>,
     state: ChartState,
+    price_range: Option<(f32, f32)>, // min, max 가격 범위
 }
-
+#[derive(Debug, Clone)]
+struct CoinPriceRange {
+    min_price: f32,
+    max_price: f32,
+}
 impl Chart {
     fn new(candlesticks: BTreeMap<u64, Candlestick>) -> Self {
+        // 기본값으로 현재 데이터의 최저/최고값 사용
+        let price_range = if candlesticks.is_empty() {
+            Some((0.0, 100.0)) // Option으로 감싸기
+        } else {
+            let (min, max) = candlesticks.values().fold((f32::MAX, f32::MIN), |acc, c| {
+                (acc.0.min(c.low), acc.1.max(c.high))
+            });
+
+            // 가격대별로 적절한 범위 설정
+            let margin_percent = match max {
+                p if p >= 10_000_000.0 => 0.001, // BTC처럼 고가 코인은 0.1% 마진
+                p if p >= 1_000_000.0 => 0.002,  // ETH처럼 중고가 코인은 0.2% 마진
+                p if p >= 100_000.0 => 0.005,    // SOL처럼 중가 코인은 0.5% 마진
+                p if p >= 10_000.0 => 0.01,      // DOT처럼 중저가 코인은 1% 마진
+                _ => 0.02,                       // XRP처럼 저가 코인은 2% 마진
+            };
+
+            let margin = (max - min) * margin_percent;
+            Some((min - margin, max + margin)) // Option으로 감싸기
+        };
+
         Self {
             candlesticks,
             state: ChartState {
                 auto_scroll: true,
                 ..ChartState::default()
             },
+            price_range,
         }
     }
 }
@@ -128,6 +157,7 @@ impl Default for Counter {
             selected_coin: "BTC".to_string(),
             coin_list,
             auto_scroll: true,
+            ws_sender: None,
         }
     }
 }
@@ -187,32 +217,40 @@ enum Input {
 fn upbit_connection() -> impl Stream<Item = Message> {
     stream! {
         let url = Url::parse("wss://api.upbit.com/websocket/v1").unwrap();
+        let (tx, mut rx) = mpsc::channel(100);
+        
+        yield Message::WebSocketInit(tx.clone());
+        
         loop {
             if let Ok((mut ws_stream, _)) = connect_async(url.clone()).await {
-                // 구독 메시지 수정 - 일봉 데이터에 더 적합한 설정
-                let subscribe_message = r#"[
-                    {"ticket":"test"},
-                    {"type":"ticker","codes":["KRW-BTC"]},
-                    {"type":"trade","codes":["KRW-BTC"]}
-                ]"#;
-
-                if let Err(_) = ws_stream.send(ME::Text(subscribe_message.to_string())).await {
-                    continue;
-                }
-
-                while let Some(Ok(message)) = ws_stream.next().await {
-                    match message {
-                        ME::Binary(bin_data) => {
-                            if let Ok(trade) = serde_json::from_str::<UpbitTrade>(&String::from_utf8_lossy(&bin_data)) {
-                                // 거래 시각 로깅
-                                println!("Trade received - Timestamp: {}, Price: {}",
-                                    trade.timestamp,
-                                    trade.trade_price
-                                );
-                                yield Message::AddCandlestick((trade.timestamp, trade));
+                loop {
+                    tokio::select! {
+                        Some(new_coin) = rx.next() => {
+                            let subscribe_message = json!([
+                                {"ticket":"test"},
+                                {"type":"ticker","codes":[format!("KRW-{}", new_coin)]},
+                                {"type":"trade","codes":[format!("KRW-{}", new_coin)]}
+                            ]).to_string();
+                            
+                            if let Err(_) = ws_stream.send(ME::Text(subscribe_message)).await {
+                                break;
+                            }
+                            println!("Subscribed to {}", new_coin);  // 디버그용
+                        }
+                        Some(Ok(message)) = ws_stream.next() => {
+                            match message {
+                                ME::Binary(bin_data) => {
+                                    if let Ok(trade) = serde_json::from_str::<UpbitTrade>(
+                                        &String::from_utf8_lossy(&bin_data)
+                                    ) {
+                                        println!("Received trade: {} {}", trade.code, trade.trade_price);  // 디버그용
+                                        yield Message::AddCandlestick((trade.timestamp, trade));
+                                    }
+                                }
+                                _ => continue,
                             }
                         }
-                        _ => continue,
+                        else => break,
                     }
                 }
             }
@@ -288,12 +326,25 @@ impl Counter {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::WebSocketInit(sender) => {
+                self.ws_sender = Some(sender);
+            }
             Message::SelectCoin(symbol) => {
                 self.selected_coin = symbol.clone();
-                println!("{}", self.selected_coin);
                 // 새로운 코인의 캔들스틱 데이터 불러오기
                 if let Ok(candles) = fetch_daily_candles(&format!("KRW-{}", symbol)) {
+                    println!(
+                        "가격 범위: {:?}",
+                        candles.values().fold((f32::MAX, f32::MIN), |acc, c| {
+                            (acc.0.min(c.low), acc.1.max(c.high))
+                        })
+                    );
                     self.candlesticks = candles;
+                }
+
+                // WebSocket에 새 코인 구독 요청
+                if let Some(sender) = &self.ws_sender {
+                    let _ = sender.clone().try_send(symbol);
                 }
                 self.auto_scroll = true;
             }
@@ -305,33 +356,30 @@ impl Counter {
             }
             Message::AddCandlestick(trade) => {
                 let (timestamp, trade_data) = trade;
-
-                // 일봉 기준으로 timestamp 조정 (UTC 기준 00:00:00)
+    
+                // 현재 선택된 코인의 데이터만 처리
+                let current_market = format!("KRW-{}", self.selected_coin);
+                if trade_data.code != current_market {
+                    return;
+                }
+            
+                println!("Received trade for {}: price {}", trade_data.code, trade_data.trade_price);  // 디버그용
+            
                 let day_timestamp = timestamp - (timestamp % (24 * 60 * 60 * 1000));
                 let trade_price = trade_data.trade_price as f32;
 
                 if let Some(candlestick) = self.candlesticks.get_mut(&day_timestamp) {
-                    // 기존 캔들 업데이트
                     candlestick.high = candlestick.high.max(trade_price);
                     candlestick.low = candlestick.low.min(trade_price);
                     candlestick.close = trade_price;
                 } else {
-                    // 새로운 일봉 캔들 생성
                     let new_candlestick = Candlestick {
                         open: trade_price,
                         high: trade_price,
                         low: trade_price,
                         close: trade_price,
                     };
-
                     self.candlesticks.insert(day_timestamp, new_candlestick);
-                }
-
-                // 캔들 개수 제한 (예: 최근 100일)
-                while self.candlesticks.len() > 100 {
-                    if let Some(first_key) = self.candlesticks.keys().next().copied() {
-                        self.candlesticks.remove(&first_key);
-                    }
                 }
 
                 self.auto_scroll = true;
@@ -365,6 +413,7 @@ impl<Message> Program<Message> for Chart {
         } else {
             return (event::Status::Ignored, None);
         };
+
         match event {
             Event::Mouse(mouse_event) => match mouse_event {
                 mouse::Event::ButtonPressed(mouse::Button::Left) => {
@@ -404,50 +453,73 @@ impl<Message> Program<Message> for Chart {
         if self.candlesticks.is_empty() {
             return vec![frame.into_geometry()];
         }
-
-        // 차트의 스케일 계산
-        let price_range = self
-            .candlesticks
-            .values() // 값만 가져오기
-            .fold((f32::MAX, f32::MIN), |acc, c| {
-                (acc.0.min(c.low), acc.1.max(c.high))
-            });
-
-        let price_diff = price_range.1 - price_range.0;
-        let y_scale = (bounds.height - 40.0) / price_diff;
-
-        let fixed_candle_width = 20.0;
+    
+        // 캔들스틱 개수에 따라 너비 조정
+        let candle_count = self.candlesticks.len() as f32;
+        let available_width = bounds.width - 40.0;  // 여백 제외
+        let fixed_candle_width = (available_width / candle_count).min(20.0);  // 최대 너비 제한
         let body_width = fixed_candle_width * 0.8;
-
-        let total_width = fixed_candle_width * self.candlesticks.len() as f32;
-
-        let start_x = if state.auto_scroll && total_width > bounds.width {
+    
+        // 전체 차트 너비
+        let total_width = fixed_candle_width * candle_count;
+    
+        // 스크롤 위치 계산
+        let start_x = if state.auto_scroll {
             bounds.width - total_width - 20.0
         } else {
-            20.0 + state.offset
+            20.0 + state.offset.min(0.0)  // 왼쪽으로만 스크롤 되도록
         };
-
-        // BTreeMap의 값들을 순회
+    
+        // 가격 범위 계산
+        let (min_price, max_price) = self.candlesticks.values().fold((f32::MAX, f32::MIN), |acc, c| {
+            (acc.0.min(c.low), acc.1.max(c.high))
+        });
+    
+        // 가격대별 마진 설정
+        let margin_percent = match max_price {
+            p if p >= 10_000_000.0 => 0.01,  // BTC
+            p if p >= 1_000_000.0 => 0.02,   // ETH
+            p if p >= 100_000.0 => 0.03,     // SOL
+            p if p >= 10_000.0 => 0.05,      // DOT
+            _ => 0.1,                        // XRP
+        };
+    
+        let margin = (max_price - min_price) * margin_percent;
+        let min_price = min_price - margin;
+        let max_price = max_price + margin;
+        let price_diff = max_price - min_price;
+        
+        // Y축 스케일 계산
+        let y_scale = (bounds.height - 40.0) / price_diff;
+    
+        // 나머지 그리기 코드는 동일...
+    
+        // 캔들스틱 그리기
         for (i, (_, candlestick)) in self.candlesticks.iter().enumerate() {
             let x = start_x + (i as f32 * fixed_candle_width);
-
+    
+            // 화면 밖의 캔들은 건너뛰기
             if x < -fixed_candle_width || x > bounds.width {
                 continue;
             }
+    
+            let scale_price = |price: f32| -> f32 { 
+                bounds.height - 20.0 - ((price - min_price) * y_scale)
+            };
+    
 
-            let scale_price =
-                |price: f32| -> f32 { bounds.height - 20.0 - ((price - price_range.0) * y_scale) };
             let open_y = scale_price(candlestick.open);
             let close_y = scale_price(candlestick.close);
             let high_y = scale_price(candlestick.high);
             let low_y = scale_price(candlestick.low);
+
             let color = if candlestick.close >= candlestick.open {
-                Color::from_rgb(0.0, 0.8, 0.0)
+                Color::from_rgb(0.8, 0.0, 0.0) // 상승 - 빨간색
             } else {
-                Color::from_rgb(0.8, 0.0, 0.0)
+                Color::from_rgb(0.0, 0.0, 0.8) // 하락 - 파란색
             };
 
-            // 심지 그리기
+            // 심지
             frame.stroke(
                 &canvas::Path::new(|builder| {
                     let center_x = x + (body_width / 2.0);
@@ -457,8 +529,8 @@ impl<Message> Program<Message> for Chart {
                 canvas::Stroke::default().with_color(color).with_width(1.0),
             );
 
-            // 몸통 그리기
-            let body_height = (close_y - open_y).abs();
+            // 몸통
+            let body_height = (close_y - open_y).abs().max(1.0);
             let body_y = close_y.min(open_y);
             frame.fill_rectangle(
                 Point::new(x, body_y),
@@ -474,10 +546,10 @@ fn fetch_daily_candles(
     market: &str,
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-
+    println!("markegt:{}", market);
     rt.block_on(async {
         let url = format!(
-            "https://api.upbit.com/v1/candles/days?market={}&count=200",
+            "https://api.upbit.com/v1/candles/days?market={}&count=10000",
             market
         );
         let response = reqwest::get(&url).await?.json::<Vec<UpbitCandle>>().await?;
