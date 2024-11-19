@@ -1,12 +1,6 @@
-use std::collections::BTreeMap;
-
-use futures_util::stream::SplitSink;
-use futures_util::stream::SplitStream;
 use futures_util::Stream;
 use iced::futures::{channel::mpsc, SinkExt, StreamExt};
-use iced::stream;
 use iced::time::{self, Duration, Instant};
-use iced::widget::canvas::Fill;
 use iced::widget::Row;
 use iced::Length::FillPortion;
 use iced::{
@@ -21,14 +15,12 @@ use iced::{
     },
     Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription,
 };
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use async_stream::stream;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpStream;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME}; // 여기에 Message를 임포트
 
 #[derive(Debug, Clone)]
@@ -168,39 +160,6 @@ impl Default for RTarde {
     }
 }
 
-enum WebSocketState {
-    Disconnected,
-    Connected(
-        SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-        SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-    ),
-}
-#[derive(Debug, Clone)]
-pub enum Event2 {
-    Ready(mpsc::Sender<Input>),
-    WorkFinished,
-    Trade(UpbitWebSocketData),
-}
-#[derive(Debug, Clone, Deserialize)]
-struct UpbitWebSocketData {
-    ty: String,              // 타입
-    code: String,            // 마켓 코드 (ex: KRW-BTC)
-    timestamp: u64,          // 타임스탬프
-    trade_price: f32,        // 체결가
-    trade_volume: f32,       // 체결량
-    ask_bid: String,         // 매수/매도 구분
-    prev_closing_price: f32, // 전일 종가
-    change: String,          // 전일 대비 (RISE, EVEN, FALL)
-    change_price: f32,       // 부호 있는 변화액
-    trade_date: String,      // 체결 날짜(UTC) (YYYYMMDD)
-    trade_time: String,      // 체결 시각(UTC) (HHmmss)
-    trade_timestamp: u64,    // 체결 타임스탬프
-    opening_price: f32,      // 시가
-    high_price: f32,         // 고가
-    low_price: f32,          // 저가
-    sequential_id: u64,      // 체결 번호
-}
-
 #[derive(Debug, Deserialize, Clone)]
 struct UpbitTrade {
     #[serde(rename = "type")]
@@ -215,18 +174,6 @@ struct UpbitTrade {
     change: String,
     change_price: f64,
     stream_type: String,
-}
-// UpbitTicker 구조체 추가
-#[derive(Deserialize)]
-struct UpbitTicker {
-    code: String,
-    trade_price: f64,
-    change_rate: f64,
-    #[serde(rename = "type")]
-    ticker_type: String,
-}
-enum Input {
-    Subscribe,
 }
 
 fn upbit_connection() -> impl Stream<Item = Message> {
@@ -718,56 +665,7 @@ impl<Message> Program<Message> for Chart {
         vec![frame.into_geometry()]
     }
 }
-fn fetch_daily_candles(
-    market: &str,
-) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
-    let rt = tokio::runtime::Runtime::new()?;
-    println!("Fetching candles for market: {}", market);
 
-    rt.block_on(async {
-        let url = format!(
-            "https://api.upbit.com/v1/candles/days?market={}&count=200",
-            market
-        );
-
-        let response = reqwest::get(&url).await?;
-        if !response.status().is_success() {
-            return Err(format!("API error: {}", response.status()).into());
-        }
-
-        let text = response.text().await?;
-        let candles: Vec<UpbitCandle> = serde_json::from_str(&text)
-            .map_err(|e| format!("Parse error for {}: {} (Response: {})", market, e, text))?;
-
-        if candles.is_empty() {
-            return Err("No candles returned".into());
-        }
-
-        let result = candles
-            .into_iter()
-            .filter(|candle| {
-                // 유효하지 않은 데이터 필터링
-                candle.opening_price > 0.0
-                    && candle.high_price > 0.0
-                    && candle.low_price > 0.0
-                    && candle.trade_price > 0.0
-            })
-            .map(|candle| {
-                (
-                    candle.timestamp,
-                    Candlestick {
-                        open: candle.opening_price,
-                        close: candle.trade_price,
-                        high: candle.high_price,
-                        low: candle.low_price,
-                    },
-                )
-            })
-            .collect();
-
-        Ok(result)
-    })
-}
 fn main() -> iced::Result {
     iced::application("Candlestick Chart", RTarde::update, RTarde::view)
         .subscription(RTarde::subscription)
