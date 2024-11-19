@@ -45,7 +45,7 @@ pub enum Message {
     RemoveCandlestick,
     SelectCoin(String),
     UpdateCoinPrice(String, f64, f64),
-    SelectCandleType(CandleType), // 새로운 메시지 타입 추가
+    SelectCandleType(CandleType),
     Error,
     WebSocketInit(mpsc::Sender<String>),
     UpdatePrice(String, f64, f64),
@@ -210,10 +210,10 @@ struct UpbitTrade {
     trade_price: f64,
     trade_volume: f64,
     ask_bid: String,
+    sequential_id: u64,
     prev_closing_price: f64,
     change: String,
     change_price: f64,
-    sequential_id: u64,
     stream_type: String,
 }
 // UpbitTicker 구조체 추가
@@ -238,11 +238,10 @@ fn upbit_connection() -> impl Stream<Item = Message> {
 
         loop {
             if let Ok((mut ws_stream, _)) = connect_async(url.clone()).await {
-                // 초기 구독 설정 (BTC)
                 let initial_subscribe = json!([
                     {"ticket":"test"},
                     {
-                        "type":"ticker",
+                        "type":"trade",    // 실시간 체결 데이터 구독
                         "codes":["KRW-BTC"],
                         "isOnlyRealtime": true
                     }
@@ -258,7 +257,7 @@ fn upbit_connection() -> impl Stream<Item = Message> {
                             let subscribe_message = json!([
                                 {"ticket":"test"},
                                 {
-                                    "type":"ticker",
+                                    "type":"trade",
                                     "codes":[format!("KRW-{}", new_coin)],
                                     "isOnlyRealtime": true
                                 }
@@ -271,21 +270,22 @@ fn upbit_connection() -> impl Stream<Item = Message> {
                         }
                         Some(Ok(message)) = ws_stream.next() => {
                             match message {
-                                ME::Binary(binary_content) => { // 변수명을 `binary_content`로 변경
-                                    if let Ok(ticker) = serde_json::from_slice::<UpbitTicker>(&binary_content) {
-                                        let symbol = ticker.code.replace("KRW-", "");
+                                ME::Binary(binary_content) => {
+                                    if let Ok(trade) = serde_json::from_slice::<UpbitTrade>(&binary_content) {
+                                        // 가격 업데이트와 캔들스틱 업데이트를 동시에 전송
+                                        let symbol = trade.code.replace("KRW-", "");
                                         yield Message::UpdatePrice(
-                                            symbol,
-                                            ticker.trade_price,
-                                            ticker.change_rate * 100.0,
+                                            symbol.clone(),
+                                            trade.trade_price,
+                                            0.0,  // 변동률은 별도 계산 필요
                                         );
+                                        yield Message::AddCandlestick((trade.timestamp, trade));
                                     }
                                 }
                                 _ => continue,
                             }
                         }
                         else => break,
-
                     }
                 }
             }
@@ -296,6 +296,7 @@ fn upbit_connection() -> impl Stream<Item = Message> {
 }
 impl RTarde {
     pub fn subscription(&self) -> Subscription<Message> {
+        // 실시간 데이터 구독
         Subscription::run(upbit_connection)
     }
     pub fn view(&self) -> Element<Message> {
@@ -451,78 +452,67 @@ impl RTarde {
             }
             Message::AddCandlestick(trade) => {
                 let (timestamp, trade_data) = trade;
-
-                // 현재 선택된 코인의 데이터만 처리
                 let current_market = format!("KRW-{}", self.selected_coin);
+
                 if trade_data.code != current_market {
                     return;
                 }
 
-                // 봉 타입에 따른 타임스탬프 계산
+                let current_timestamp = timestamp;
                 let candle_timestamp = match self.selected_candle_type {
-                    CandleType::Minute1 => timestamp - (timestamp % (60 * 1000)), // 1분
-                    CandleType::Minute3 => timestamp - (timestamp % (3 * 60 * 1000)), // 3분
-                    CandleType::Day => timestamp - (timestamp % (24 * 60 * 60 * 1000)), // 1일
+                    CandleType::Minute1 => current_timestamp - (current_timestamp % (60 * 1000)),
+                    CandleType::Minute3 => {
+                        current_timestamp - (current_timestamp % (3 * 60 * 1000))
+                    }
+                    CandleType::Day => {
+                        current_timestamp - (current_timestamp % (24 * 60 * 60 * 1000))
+                    }
                 };
 
                 let trade_price = trade_data.trade_price as f32;
 
-                // 현재 가격 범위 계산 및 필터링
-                if !self.candlesticks.is_empty() {
-                    let (min, max) = self
-                        .candlesticks
-                        .values()
-                        .fold((f32::MAX, f32::MIN), |acc, c| {
-                            (acc.0.min(c.low), acc.1.max(c.high))
-                        });
+                // 최신 캔들스틱과 비교
+                let latest_timestamp = self.candlesticks.keys().next_back().cloned();
 
-                    let valid_range = match self.selected_coin.as_str() {
-                        "BTC" => (min * 0.7, max * 1.3),
-                        "ETH" => (min * 0.6, max * 1.4),
-                        _ => (min * 0.5, max * 1.5),
-                    };
-
-                    if trade_price < valid_range.0 || trade_price > valid_range.1 {
+                if let Some(latest_ts) = latest_timestamp {
+                    if candle_timestamp > latest_ts {
+                        // 새로운 캔들스틱 시작
+                        let new_candlestick = Candlestick {
+                            open: trade_price,
+                            high: trade_price,
+                            low: trade_price,
+                            close: trade_price,
+                        };
+                        self.candlesticks.insert(candle_timestamp, new_candlestick);
                         println!(
-                            "Filtered price for {}: {:.2} (range: {:.2} ~ {:.2})",
-                            self.selected_coin, trade_price, valid_range.0, valid_range.1
+                            "New candlestick at: {} price: {}",
+                            candle_timestamp, trade_price
                         );
-                        return;
-                    }
-                }
 
-                // 캔들스틱 업데이트 또는 새로 추가
-                if let Some(candlestick) = self.candlesticks.get_mut(&candle_timestamp) {
-                    candlestick.high = candlestick.high.max(trade_price);
-                    candlestick.low = candlestick.low.min(trade_price);
-                    candlestick.close = trade_price;
-                    println!(
-                        "Updated candlestick at {}: O:{:.2} H:{:.2} L:{:.2} C:{:.2}",
-                        candle_timestamp,
-                        candlestick.open,
-                        candlestick.high,
-                        candlestick.low,
-                        candlestick.close
-                    );
+                        // 오래된 캔들 제거
+                        while self.candlesticks.len() > 100 {
+                            if let Some(first_key) = self.candlesticks.keys().next().cloned() {
+                                self.candlesticks.remove(&first_key);
+                            }
+                        }
+                    } else if candle_timestamp == latest_ts {
+                        // 현재 캔들스틱 업데이트
+                        if let Some(current_candle) = self.candlesticks.get_mut(&candle_timestamp) {
+                            current_candle.high = current_candle.high.max(trade_price);
+                            current_candle.low = current_candle.low.min(trade_price);
+                            current_candle.close = trade_price;
+                            println!("Updated candlestick: close {}", trade_price);
+                        }
+                    }
                 } else {
+                    // 첫 캔들스틱 생성
                     let new_candlestick = Candlestick {
                         open: trade_price,
                         high: trade_price,
                         low: trade_price,
                         close: trade_price,
                     };
-                    println!(
-                        "Created new candlestick at {}: {:.2}",
-                        candle_timestamp, trade_price
-                    );
                     self.candlesticks.insert(candle_timestamp, new_candlestick);
-
-                    // 캔들 개수 제한 (최근 100개만 유지)
-                    while self.candlesticks.len() > 100 {
-                        if let Some(first_key) = self.candlesticks.keys().next().cloned() {
-                            self.candlesticks.remove(&first_key);
-                        }
-                    }
                 }
 
                 self.auto_scroll = true;
@@ -878,15 +868,15 @@ async fn fetch_candles_async(
     let text = response.text().await?;
     println!("Response text sample: {:.200}...", text);
 
-    let result: BTreeMap<u64, Candlestick> = match candle_type {
+    let mut result: BTreeMap<u64, Candlestick> = match candle_type {
         CandleType::Minute1 | CandleType::Minute3 => {
-            let candles: Vec<UpbitMinuteCandle> = serde_json::from_str(&text).map_err(|e| {
-                format!("Parse error for minute candles: {} (Response: {})", e, text)
-            })?;
+            let candles: Vec<UpbitMinuteCandle> = serde_json::from_str(&text)?;
 
-            println!("Parsed {} minute candles", candles.len());
+            // 시간 순서대로 정렬 (오래된 순)
+            let mut sorted_candles = candles;
+            sorted_candles.sort_by_key(|c| c.timestamp);
 
-            candles
+            sorted_candles
                 .into_iter()
                 .filter(|candle| {
                     candle.opening_price > 0.0
@@ -908,12 +898,12 @@ async fn fetch_candles_async(
                 .collect()
         }
         CandleType::Day => {
-            let candles: Vec<UpbitCandle> = serde_json::from_str(&text)
-                .map_err(|e| format!("Parse error for day candles: {} (Response: {})", e, text))?;
+            let candles: Vec<UpbitCandle> = serde_json::from_str(&text)?;
 
-            println!("Parsed {} day candles", candles.len());
+            let mut sorted_candles = candles;
+            sorted_candles.sort_by_key(|c| c.timestamp);
 
-            candles
+            sorted_candles
                 .into_iter()
                 .filter(|candle| {
                     candle.opening_price > 0.0
