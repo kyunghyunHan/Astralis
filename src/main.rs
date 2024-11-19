@@ -1190,15 +1190,15 @@ async fn fetch_candles_async(
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let url = match candle_type {
         CandleType::Minute1 => format!(
-            "https://api.upbit.com/v1/candles/minutes/1?market={}&count=1000",
+            "https://api.upbit.com/v1/candles/minutes/1?market={}&count=200",
             market
         ),
         CandleType::Minute3 => format!(
-            "https://api.upbit.com/v1/candles/minutes/3?market={}&count=1000",
+            "https://api.upbit.com/v1/candles/minutes/3?market={}&count=200",
             market
         ),
         CandleType::Day => format!(
-            "https://api.upbit.com/v1/candles/days?market={}&count=1000",
+            "https://api.upbit.com/v1/candles/days?market={}&count=200",
             market
         ),
     };
