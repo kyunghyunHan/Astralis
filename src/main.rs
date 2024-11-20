@@ -16,7 +16,7 @@ use iced::{
         checkbox, column, container, pick_list, text, text_input, Checkbox, Column, Container,
         PickList, Space, Text,
     },
-    Color, Element, Font, Length, Pixels, Point, Rectangle, Size, Subscription,
+    Color, Element, Font, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
 };
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -123,7 +123,7 @@ struct Chart {
     ma20_values: BTreeMap<u64, f32>,
     ma200_values: BTreeMap<u64, f32>,
     rsi_values: BTreeMap<u64, f32>,
-    show_rsi: bool,  // RSI 표시 여부
+    show_rsi: bool, // RSI 표시 여부
 }
 impl Chart {
     fn new(
@@ -138,7 +138,7 @@ impl Chart {
         let ma10_values = calculate_moving_average(&candlesticks, 10);
         let ma20_values = calculate_moving_average(&candlesticks, 20);
         let ma200_values = calculate_moving_average(&candlesticks, 200);
-        let rsi_values = calculate_rsi(&candlesticks, 14);  // 14기간 RSI 계산
+        let rsi_values = calculate_rsi(&candlesticks, 14); // 14기간 RSI 계산
 
         let price_range = if candlesticks.is_empty() {
             Some((0.0, 100.0))
@@ -181,7 +181,7 @@ impl Chart {
             ma20_values,
             ma200_values,
             rsi_values,
-            show_rsi: true,  // 기본적으로 RSI 표시
+            show_rsi: true, // 기본적으로 RSI 표시
         }
     }
 }
@@ -370,6 +370,9 @@ impl RTarde {
         // 실시간 데이터 구독
         Subscription::run(upbit_connection)
     }
+    fn theme(&self) -> Theme {
+        Theme::TokyoNight
+    }
     pub fn view(&self) -> Element<Message> {
         let ma_controls = Container::new(
             Column::new()
@@ -419,7 +422,6 @@ impl RTarde {
         .width(Length::Fixed(100.0));
 
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            let font_bytes = include_bytes!("../assets/font/NanumGothic-Bold.ttf");
             let custom_font = Font::with_name("NotoSansCJK");
 
             // 가격 변화 화살표 (상승/하락)
@@ -481,17 +483,6 @@ impl RTarde {
                             ),
                     )
                     .padding(15)
-                    // .style(iced::theme::Container::Custom(Box::new(|theme| {
-                    //     iced::theme::Container {
-                    //         background: Some(iced::Background::Color(Color::from_rgb(
-                    //             0.95, 0.95, 0.95,
-                    //         ))),
-                    //         border_radius: 8.0.into(),
-                    //         border_width: 1.0,
-                    //         border_color: Color::from_rgb(0.9, 0.9, 0.9),
-                    //         text_color: None,
-                    //     }
-                    // })))
                     .width(Length::Fill),
                 )
                 .push(
@@ -503,7 +494,7 @@ impl RTarde {
                                 Row::new()
                                     .spacing(5)
                                     .push(
-                                        Text::new("24H 고가")
+                                        Text::new("24H HIGH")
                                             .size(14)
                                             .color(Color::from_rgb(0.5, 0.5, 0.5)),
                                     )
@@ -516,7 +507,7 @@ impl RTarde {
                                 Row::new()
                                     .spacing(5)
                                     .push(
-                                        Text::new("24H 저가")
+                                        Text::new("24H LOW")
                                             .size(14)
                                             .color(Color::from_rgb(0.5, 0.5, 0.5)),
                                     )
@@ -530,7 +521,7 @@ impl RTarde {
                     .width(Length::Fill),
                 )
         } else {
-            Column::new().push(Text::new("로딩중..."))
+            Column::new().push(Text::new("Loding..."))
         };
 
         // 수정된 부분: Chart::new()에 selected_candle_type 전달
@@ -553,24 +544,24 @@ impl RTarde {
             .spacing(20)
             .padding(20)
             .push(
-                Container::new(Text::new("주문하기").size(24))
+                Container::new(Text::new("Order").size(24))
                     .width(Length::Fill)
                     .center_x(0),
             )
             .push(
                 Column::new()
                     .spacing(10)
-                    .push(Text::new("주문 유형").size(16))
+                    .push(Text::new("Order Type").size(16))
                     .push(
                         Row::new()
                             .spacing(10)
                             .push(
-                                button(Text::new("시장가 매수"))
+                                button(Text::new("buy at market price"))
                                     // .style(iced::theme::Button::Primary)
                                     .width(Length::Fill),
                             )
                             .push(
-                                button(Text::new("시장가 매도"))
+                                button(Text::new("sell at market price"))
                                     // .style(iced::theme::Button::Secondary)
                                     .width(Length::Fill),
                             ),
@@ -579,29 +570,29 @@ impl RTarde {
             .push(
                 Column::new()
                     .spacing(10)
-                    .push(Text::new("지정가 주문").size(16))
+                    .push(Text::new("limit order").size(16))
                     .push(
                         Row::new()
                             .spacing(10)
-                            .push(text_input("가격을 입력하세요...", ""))
+                            .push(text_input("Enter price...", ""))
                             .push(Text::new("KRW")),
                     )
                     .push(
                         Row::new()
                             .spacing(10)
-                            .push(text_input("수량을 입력하세요...", ""))
+                            .push(text_input("Please enter the quantity....", ""))
                             .push(Text::new(self.selected_coin.clone())),
                     )
                     .push(
                         Row::new()
                             .spacing(10)
                             .push(
-                                button(Text::new("지정가 매수"))
+                                button(Text::new("limit price purchase"))
                                     // .style(iced::theme::Button::Primary)
                                     .width(Length::Fill),
                             )
                             .push(
-                                button(Text::new("지정가 매도"))
+                                button(Text::new("limit price sale"))
                                     // .style(iced::theme::Button::Secondary)
                                     .width(Length::Fill),
                             ),
@@ -610,7 +601,7 @@ impl RTarde {
             .push(
                 Column::new()
                     .spacing(10)
-                    .push(Text::new("주문 비율").size(16))
+                    .push(Text::new("order rate").size(16))
                     .push(
                         Row::new()
                             .spacing(5)
@@ -625,7 +616,7 @@ impl RTarde {
                 Container::new(
                     Column::new()
                         .spacing(10)
-                        .push(Text::new("보유자산").size(16))
+                        .push(Text::new("assets held").size(16))
                         .push(
                             Row::new()
                                 .spacing(10)
@@ -640,20 +631,20 @@ impl RTarde {
                         ),
                 ), // .style(iced::theme::Container::Box),
             );
+
+        //메인
         Column::new()
             // .spacing(20)
             .push(
                 Row::new()
-                    // .spacing(20)
-                    .push(coin_picker)
-                    .push(candle_type_picker)
-                    .push(ma_controls),
+                    .push(coin_picker.width(FillPortion(1)))
+                    .push(candle_type_picker.width(FillPortion(1)))
+                    .push(ma_controls.width(FillPortion(10))),
             )
             .push(
                 Row::new()
-                    // .spacing(10)
                     .push(container(left_side_bar).width(FillPortion(1)))
-                    .push(container(canvas).width(FillPortion(3)))
+                    .push(container(canvas).width(FillPortion(4)))
                     .push(container(right_side_bar).width(FillPortion(1))),
             )
             .into()
@@ -890,12 +881,17 @@ impl<Message> Program<Message> for Chart {
         let bottom_margin = 50.0;
 
         // 각 차트의 높이 설정
-        let rsi_height = 80.0;  // RSI 차트 높이
-        let volume_height = 100.0;  // 거래량 차트 높이
-        let charts_gap = 20.0;  // 차트 간 간격
+        let rsi_height = 80.0; // RSI 차트 높이
+        let volume_height = 100.0; // 거래량 차트 높이
+        let charts_gap = 20.0; // 차트 간 간격
 
         // 가격 차트 높이 계산
-        let price_chart_height = bounds.height - volume_height - rsi_height - bottom_margin - top_margin - (charts_gap * 2.0);
+        let price_chart_height = bounds.height
+            - volume_height
+            - rsi_height
+            - bottom_margin
+            - top_margin
+            - (charts_gap * 2.0);
 
         // 차트 영역 계산
         let price_area_end = top_margin + price_chart_height;
@@ -912,10 +908,12 @@ impl<Message> Program<Message> for Chart {
         );
 
         // 가격 범위 계산
-        let (mut min_price, mut max_price) = self.candlesticks.values().fold(
-            (f32::MAX, f32::MIN),
-            |acc, c| (acc.0.min(c.low), acc.1.max(c.high))
-        );
+        let (mut min_price, mut max_price) = self
+            .candlesticks
+            .values()
+            .fold((f32::MAX, f32::MIN), |acc, c| {
+                (acc.0.min(c.low), acc.1.max(c.high))
+            });
 
         // 이동평균선 값도 고려
         let ma_values = [
@@ -940,7 +938,9 @@ impl<Message> Program<Message> for Chart {
         max_price += price_margin;
 
         // 거래량 최대값 계산
-        let max_volume = self.candlesticks.values()
+        let max_volume = self
+            .candlesticks
+            .values()
             .map(|c| c.volume)
             .fold(0.0, f32::max);
 
@@ -1066,10 +1066,10 @@ impl<Message> Program<Message> for Chart {
         // RSI 그리기
         if self.show_rsi {
             // RSI 기준선 그리기
-            let rsi_levels = [(70.0, "과매수"), (50.0, "중립"), (30.0, "과매도")];
+            let rsi_levels = [(70.0, "overbought"), (50.0, "neutrality"), (30.0, "oversold")];
             for (level, label) in rsi_levels.iter() {
                 let y = rsi_area_start + (rsi_height * (1.0 - (level / 100.0)));
-                
+
                 frame.stroke(
                     &canvas::Path::new(|p| {
                         p.move_to(Point::new(left_margin, y));
@@ -1122,10 +1122,26 @@ impl<Message> Program<Message> for Chart {
 
         // 이동평균선 그리기
         let ma_lines = [
-            (self.show_ma5, &self.ma5_values, Color::from_rgb(1.0, 1.0, 0.0)),
-            (self.show_ma10, &self.ma10_values, Color::from_rgb(0.0, 1.0, 0.0)),
-            (self.show_ma20, &self.ma20_values, Color::from_rgb(1.0, 0.0, 1.0)),
-            (self.show_ma200, &self.ma200_values, Color::from_rgb(0.0, 1.0, 1.0)),
+            (
+                self.show_ma5,
+                &self.ma5_values,
+                Color::from_rgb(1.0, 1.0, 0.0),
+            ),
+            (
+                self.show_ma10,
+                &self.ma10_values,
+                Color::from_rgb(0.0, 1.0, 0.0),
+            ),
+            (
+                self.show_ma20,
+                &self.ma20_values,
+                Color::from_rgb(1.0, 0.0, 1.0),
+            ),
+            (
+                self.show_ma200,
+                &self.ma200_values,
+                Color::from_rgb(0.0, 1.0, 1.0),
+            ),
         ];
 
         for (show, values, color) in ma_lines.iter() {
@@ -1164,12 +1180,10 @@ impl<Message> Program<Message> for Chart {
 }
 
 fn main() -> iced::Result {
-    let font_bytes = include_bytes!("../assets/font/NanumGothic-Bold.ttf");
-
     iced::application("Candlestick Chart", RTarde::update, RTarde::view)
         .subscription(RTarde::subscription)
         .window_size(Size::new(1980., 1080.))
-        .font(font_bytes)
+        // .font(font_bytes)
         .run()
 }
 #[derive(Debug, Deserialize, Clone)]
