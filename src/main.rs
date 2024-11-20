@@ -122,6 +122,8 @@ struct Chart {
     ma10_values: BTreeMap<u64, f32>,
     ma20_values: BTreeMap<u64, f32>,
     ma200_values: BTreeMap<u64, f32>,
+    rsi_values: BTreeMap<u64, f32>,
+    show_rsi: bool,  // RSI 표시 여부
 }
 impl Chart {
     fn new(
@@ -136,6 +138,7 @@ impl Chart {
         let ma10_values = calculate_moving_average(&candlesticks, 10);
         let ma20_values = calculate_moving_average(&candlesticks, 20);
         let ma200_values = calculate_moving_average(&candlesticks, 200);
+        let rsi_values = calculate_rsi(&candlesticks, 14);  // 14기간 RSI 계산
 
         let price_range = if candlesticks.is_empty() {
             Some((0.0, 100.0))
@@ -177,6 +180,8 @@ impl Chart {
             ma10_values,
             ma20_values,
             ma200_values,
+            rsi_values,
+            show_rsi: true,  // 기본적으로 RSI 표시
         }
     }
 }
@@ -252,6 +257,47 @@ fn calculate_moving_average(
     }
 
     result
+}
+fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BTreeMap<u64, f32> {
+    let mut rsi_values = BTreeMap::new();
+    if candlesticks.len() < period + 1 {
+        return rsi_values;
+    }
+
+    let mut price_changes: Vec<(u64, f32)> = Vec::new();
+    let mut prev_close = None;
+
+    // 가격 변화 계산
+    for (timestamp, candle) in candlesticks.iter() {
+        if let Some(prev) = prev_close {
+            let change = candle.close - prev;
+            price_changes.push((*timestamp, change));
+        }
+        prev_close = Some(candle.close);
+    }
+
+    // RSI 계산
+    for i in period..price_changes.len() {
+        let window = &price_changes[i - period + 1..=i];
+        let (gains, losses): (Vec<f32>, Vec<f32>) = window
+            .iter()
+            .map(|(_, change)| *change)
+            .partition(|&change| change >= 0.0);
+
+        let avg_gain: f32 = gains.iter().sum::<f32>() / period as f32;
+        let avg_loss: f32 = losses.iter().map(|&x| x.abs()).sum::<f32>() / period as f32;
+
+        let rs = if avg_loss == 0.0 {
+            100.0
+        } else {
+            avg_gain / avg_loss
+        };
+
+        let rsi = 100.0 - (100.0 / (1.0 + rs));
+        rsi_values.insert(price_changes[i].0, rsi);
+    }
+
+    rsi_values
 }
 
 fn upbit_connection() -> impl Stream<Item = Message> {
@@ -836,14 +882,42 @@ impl<Message> Program<Message> for Chart {
         if self.candlesticks.is_empty() {
             return vec![frame.into_geometry()];
         }
-        let (mut min_price, mut max_price) = self
-            .candlesticks
-            .values()
-            .fold((f32::MAX, f32::MIN), |acc, c| {
-                (acc.0.min(c.low), acc.1.max(c.high))
-            });
 
-        // 이동평균선의 최소/최대값도 고려
+        // 여백 설정
+        let left_margin = 50.0;
+        let right_margin = 20.0;
+        let top_margin = 20.0;
+        let bottom_margin = 50.0;
+
+        // 각 차트의 높이 설정
+        let rsi_height = 80.0;  // RSI 차트 높이
+        let volume_height = 100.0;  // 거래량 차트 높이
+        let charts_gap = 20.0;  // 차트 간 간격
+
+        // 가격 차트 높이 계산
+        let price_chart_height = bounds.height - volume_height - rsi_height - bottom_margin - top_margin - (charts_gap * 2.0);
+
+        // 차트 영역 계산
+        let price_area_end = top_margin + price_chart_height;
+        let volume_area_start = price_area_end + charts_gap;
+        let volume_area_end = volume_area_start + volume_height;
+        let rsi_area_start = volume_area_end + charts_gap;
+        let rsi_area_end = rsi_area_start + rsi_height;
+
+        // 배경 그리기
+        frame.fill_rectangle(
+            Point::new(0.0, 0.0),
+            bounds.size(),
+            Color::from_rgb(0.1, 0.1, 0.15),
+        );
+
+        // 가격 범위 계산
+        let (mut min_price, mut max_price) = self.candlesticks.values().fold(
+            (f32::MAX, f32::MIN),
+            |acc, c| (acc.0.min(c.low), acc.1.max(c.high))
+        );
+
+        // 이동평균선 값도 고려
         let ma_values = [
             (self.show_ma5, &self.ma5_values),
             (self.show_ma10, &self.ma10_values),
@@ -862,76 +936,13 @@ impl<Message> Program<Message> for Chart {
 
         // 여유 공간 추가
         let price_margin = (max_price - min_price) * 0.1;
-        min_price -= price_margin;
+        min_price = (min_price - price_margin).max(0.0);
         max_price += price_margin;
 
-        // 이동평균선 그리기
-        let ma_lines = [
-            (
-                self.show_ma5,
-                &self.ma5_values,
-                Color::from_rgb(1.0, 1.0, 0.0),
-            ), // 노란색
-            (
-                self.show_ma10,
-                &self.ma10_values,
-                Color::from_rgb(0.0, 1.0, 0.0),
-            ), // 녹색
-            (
-                self.show_ma20,
-                &self.ma20_values,
-                Color::from_rgb(1.0, 0.0, 1.0),
-            ), // 보라색
-            (
-                self.show_ma200,
-                &self.ma200_values,
-                Color::from_rgb(0.0, 1.0, 1.0),
-            ), // 하늘색
-        ];
-
-        // 여백 설정
-        let left_margin = 50.0;
-        let right_margin = 20.0;
-        let top_margin = 20.0;
-        let bottom_margin = 50.0;
-
-        // 거래량 차트의 높이 설정
-        let volume_height = 100.0;
-        let price_chart_height = bounds.height - volume_height - bottom_margin - top_margin - 20.0; // 차트 사이 간격 추가
-                                                                                                    // 스케일링 계산
-        let price_diff = (max_price - min_price).max(f32::EPSILON);
-        let y_scale = (price_chart_height / price_diff).min(1e6);
-
-        // 배경 그리기
-        frame.fill_rectangle(
-            Point::new(0.0, 0.0),
-            bounds.size(),
-            Color::from_rgb(0.1, 0.1, 0.15),
-        );
-
-        // 가격 및 거래량 범위 계산
-        let (mut min_price, mut max_price) = self
-            .candlesticks
-            .values()
-            .fold((f32::MAX, f32::MIN), |acc, c| {
-                (acc.0.min(c.low), acc.1.max(c.high))
-            });
-
-        let max_volume = self
-            .candlesticks
-            .values()
+        // 거래량 최대값 계산
+        let max_volume = self.candlesticks.values()
             .map(|c| c.volume)
             .fold(0.0, f32::max);
-
-        // 마진 추가
-        let margin = (max_price - min_price) * 0.1;
-        min_price = (min_price - margin).max(0.0);
-        max_price += margin;
-
-        // 스케일링 계산
-        let price_diff = (max_price - min_price).max(f32::EPSILON);
-        let y_scale = (price_chart_height / price_diff).min(1e6);
-        let volume_scale = (volume_height / max_volume).min(1e6);
 
         // 캔들스틱 크기 계산
         let candle_count = self.candlesticks.len() as f32;
@@ -942,6 +953,11 @@ impl<Message> Program<Message> for Chart {
             CandleType::Day => (available_width / candle_count).min(15.0),
         };
         let body_width = fixed_candle_width * 0.8;
+
+        // 스케일링 계산
+        let price_diff = (max_price - min_price).max(f32::EPSILON);
+        let y_scale = (price_chart_height / price_diff).min(1e6);
+        let volume_scale = (volume_height / max_volume).min(1e6);
 
         // 가격 차트 그리드 라인
         for i in 0..=10 {
@@ -967,74 +983,12 @@ impl<Message> Program<Message> for Chart {
             });
         }
 
-        // 거래량 차트 영역 구분선
-        let volume_area_start = top_margin + price_chart_height + 10.0;
-        let volume_area_end = volume_area_start + volume_height;
-        frame.stroke(
-            &canvas::Path::new(|p| {
-                p.move_to(Point::new(left_margin, volume_area_start));
-                p.line_to(Point::new(bounds.width - right_margin, volume_area_start));
-            }),
-            canvas::Stroke::default()
-                .with_color(Color::from_rgb(0.3, 0.3, 0.3))
-                .with_width(1.0),
-        );
-
-        // 거래량 차트 그리드 라인
-        for i in 0..=2 {
-            let y = volume_area_end - (volume_height * (i as f32 / 2.0)); // 위치를 뒤집음
-            let volume = max_volume * (i as f32 / 2.0);
-
-            frame.stroke(
-                &canvas::Path::new(|p| {
-                    p.move_to(Point::new(left_margin, y));
-                    p.line_to(Point::new(bounds.width - right_margin, y));
-                }),
-                canvas::Stroke::default()
-                    .with_color(Color::from_rgb(0.2, 0.2, 0.25))
-                    .with_width(1.0),
-            );
-
-            frame.fill_text(canvas::Text {
-                content: format!("{:.0}", volume),
-                position: Point::new(5.0, y - 5.0),
-                color: Color::from_rgb(0.7, 0.7, 0.7),
-                size: Pixels(10.0),
-                ..canvas::Text::default()
-            });
-        }
         // 캔들스틱과 거래량 바 그리기
         for (i, (timestamp, candlestick)) in self.candlesticks.iter().enumerate() {
             let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
 
             if x < -fixed_candle_width || x > bounds.width {
                 continue;
-            }
-
-            // 시간 레이블
-            if i % 10 == 0 {
-                let time_str = match self.candle_type {
-                    CandleType::Minute1 | CandleType::Minute3 => {
-                        let dt = chrono::DateTime::from_timestamp((*timestamp / 1000) as i64, 0)
-                            .unwrap_or_default()
-                            .with_timezone(&chrono::Local);
-                        dt.format("%H:%M").to_string()
-                    }
-                    CandleType::Day => {
-                        let dt = chrono::DateTime::from_timestamp((*timestamp / 1000) as i64, 0)
-                            .unwrap_or_default()
-                            .with_timezone(&chrono::Local);
-                        dt.format("%m/%d").to_string()
-                    }
-                };
-
-                frame.fill_text(canvas::Text {
-                    content: time_str,
-                    position: Point::new(x - 15.0, bounds.height - bottom_margin + 15.0),
-                    color: Color::from_rgb(0.7, 0.7, 0.7),
-                    size: Pixels(10.0),
-                    ..canvas::Text::default()
-                });
             }
 
             let color = if candlestick.close >= candlestick.open {
@@ -1068,8 +1022,7 @@ impl<Message> Program<Message> for Chart {
                 color,
             );
 
-            // 거래량 바 그리기
-            // 거래량 바 그리기 부분
+            // 거래량 바
             let volume_height = candlestick.volume * volume_scale;
             let volume_color = if candlestick.close >= candlestick.open {
                 Color::from_rgba(0.8, 0.0, 0.0, 0.5)
@@ -1077,25 +1030,117 @@ impl<Message> Program<Message> for Chart {
                 Color::from_rgba(0.0, 0.0, 0.8, 0.5)
             };
 
-            // 거래량 바의 시작점을 volume_area_end에서 시작하여 위로 그리기
             frame.fill_rectangle(
                 Point::new(x, volume_area_end),
-                Size::new(body_width, -volume_height), // 음수 높이로 위 방향으로 그리기
+                Size::new(body_width, -volume_height),
                 volume_color,
             );
+
+            // 시간 레이블
+            if i % 10 == 0 {
+                let time_str = match self.candle_type {
+                    CandleType::Minute1 | CandleType::Minute3 => {
+                        let dt = chrono::DateTime::from_timestamp((*timestamp / 1000) as i64, 0)
+                            .unwrap_or_default()
+                            .with_timezone(&chrono::Local);
+                        dt.format("%H:%M").to_string()
+                    }
+                    CandleType::Day => {
+                        let dt = chrono::DateTime::from_timestamp((*timestamp / 1000) as i64, 0)
+                            .unwrap_or_default()
+                            .with_timezone(&chrono::Local);
+                        dt.format("%m/%d").to_string()
+                    }
+                };
+
+                frame.fill_text(canvas::Text {
+                    content: time_str,
+                    position: Point::new(x - 15.0, bounds.height - 5.0),
+                    color: Color::from_rgb(0.7, 0.7, 0.7),
+                    size: Pixels(10.0),
+                    ..canvas::Text::default()
+                });
+            }
         }
+
+        // RSI 그리기
+        if self.show_rsi {
+            // RSI 기준선 그리기
+            let rsi_levels = [(70.0, "과매수"), (50.0, "중립"), (30.0, "과매도")];
+            for (level, label) in rsi_levels.iter() {
+                let y = rsi_area_start + (rsi_height * (1.0 - (level / 100.0)));
+                
+                frame.stroke(
+                    &canvas::Path::new(|p| {
+                        p.move_to(Point::new(left_margin, y));
+                        p.line_to(Point::new(bounds.width - right_margin, y));
+                    }),
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(0.2, 0.2, 0.25))
+                        .with_width(1.0),
+                );
+
+                frame.fill_text(canvas::Text {
+                    content: format!("RSI {} ({})", level, label),
+                    position: Point::new(5.0, y - 5.0),
+                    color: Color::from_rgb(0.7, 0.7, 0.7),
+                    size: Pixels(10.0),
+                    ..canvas::Text::default()
+                });
+            }
+
+            // RSI 선 그리기
+            let mut rsi_path_builder = canvas::path::Builder::new();
+            let mut first_rsi = true;
+
+            for (i, (timestamp, _)) in self.candlesticks.iter().enumerate() {
+                if let Some(&rsi) = self.rsi_values.get(timestamp) {
+                    let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
+                    let rsi_y = rsi_area_start + (rsi_height * (1.0 - (rsi / 100.0)));
+
+                    if x < -fixed_candle_width || x > bounds.width {
+                        continue;
+                    }
+
+                    if first_rsi {
+                        rsi_path_builder.move_to(Point::new(x + body_width / 2.0, rsi_y));
+                        first_rsi = false;
+                    } else {
+                        rsi_path_builder.line_to(Point::new(x + body_width / 2.0, rsi_y));
+                    }
+                }
+            }
+
+            let rsi_path = rsi_path_builder.build();
+            frame.stroke(
+                &rsi_path,
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgb(1.0, 0.5, 0.0))
+                    .with_width(1.5),
+            );
+        }
+
+        // 이동평균선 그리기
+        let ma_lines = [
+            (self.show_ma5, &self.ma5_values, Color::from_rgb(1.0, 1.0, 0.0)),
+            (self.show_ma10, &self.ma10_values, Color::from_rgb(0.0, 1.0, 0.0)),
+            (self.show_ma20, &self.ma20_values, Color::from_rgb(1.0, 0.0, 1.0)),
+            (self.show_ma200, &self.ma200_values, Color::from_rgb(0.0, 1.0, 1.0)),
+        ];
+
         for (show, values, color) in ma_lines.iter() {
             if *show && !values.is_empty() {
                 let mut path_builder = canvas::path::Builder::new();
                 let mut first = true;
 
-                // timestamp를 정렬된 순서로 처리
-                let timestamps: Vec<_> = self.candlesticks.keys().collect();
-
-                for (i, &timestamp) in timestamps.iter().enumerate() {
+                for (i, (timestamp, _)) in self.candlesticks.iter().enumerate() {
                     if let Some(&ma_price) = values.get(timestamp) {
                         let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
                         let y = top_margin + ((max_price - ma_price) * y_scale);
+
+                        if x < -fixed_candle_width || x > bounds.width + fixed_candle_width {
+                            continue;
+                        }
 
                         if first {
                             path_builder.move_to(Point::new(x, y));
@@ -1107,13 +1152,13 @@ impl<Message> Program<Message> for Chart {
                 }
 
                 let path = path_builder.build();
-
                 frame.stroke(
                     &path,
                     canvas::Stroke::default().with_color(*color).with_width(1.5),
                 );
             }
         }
+
         vec![frame.into_geometry()]
     }
 }
