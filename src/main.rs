@@ -630,7 +630,7 @@ impl RTarde {
             self.show_ma200, // 200일 이동평균선 표시 여부
         ))
         .width(iced::Fill)
-        .height(Length::from(500));
+        .height(Length::from(800));
 
         let left_side_bar = Column::new()
             .spacing(20)
@@ -1003,25 +1003,25 @@ impl<Message> Program<Message> for Chart {
                     state.dragging = false;
                     (event::Status::Captured, None)
                 }
-                // mouse::Event::CursorMoved { .. } => {
-                //     if state.dragging {
-                //         let delta_x = cursor_position.x - state.drag_start.x; // 드래그 방향과 크기
-                //         let new_offset = state.last_offset + delta_x;
-                //         println!("{}", cursor_position.x);
-                //         // 드래그가 좌로 이동했을 때 처리 (delta_x < 0)
-                //         if delta_x < 0.0 && new_offset < state.offset && !state.need_more_data {
-                //             println!("{}", "좌로 드래그 - 이전 데이터 로드 필요");
+                mouse::Event::CursorMoved { .. } => {
+                    if state.dragging {
+                        let delta_x = cursor_position.x - state.drag_start.x; // 드래그 방향과 크기
+                        let new_offset = state.last_offset + delta_x;
+                        println!("{}", cursor_position.x);
+                        // 드래그가 좌로 이동했을 때 처리 (delta_x < 0)
+                        if delta_x < 0.0 && new_offset < state.offset && !state.need_more_data {
+                            println!("{}", "좌로 드래그 - 이전 데이터 로드 필요");
 
-                //             state.need_more_data = true; // 데이터를 요청해야 한다는 플래그 설정
-                //         }
+                            state.need_more_data = true; // 데이터를 요청해야 한다는 플래그 설정
+                        }
 
-                //         // 새로운 오프셋 업데이트
-                //         state.offset = new_offset;
-                //         (event::Status::Captured, None)
-                //     } else {
-                //         (event::Status::Ignored, None)
-                //     }
-                // }
+                        // 새로운 오프셋 업데이트
+                        state.offset = new_offset;
+                        (event::Status::Captured, None)
+                    } else {
+                        (event::Status::Ignored, None)
+                    }
+                }
                 _ => (event::Status::Ignored, None),
             },
             _ => (event::Status::Ignored, None),
@@ -1055,21 +1055,22 @@ impl<Message> Program<Message> for Chart {
         let rsi_height = 80.0; // RSI 차트 높이
         let volume_height = 100.0; // 거래량 차트 높이
         let charts_gap = 20.0; // 차트 간 간격
+        let margin = 20.0; // 기본 여백
+        let bottom_margin = 40.0;
 
         // 가격 차트 높이 계산
-        let price_chart_height = bounds.height
-            - volume_height
-            - rsi_height
-            - bottom_margin
-            - top_margin
-            - (charts_gap * 2.0);
+        let price_chart_height = bounds.height * 0.5;  // 가격 차트 높이 증가 (75%)
+        let remaining_height = bounds.height - price_chart_height - margin - bottom_margin;
+        let volume_area_height = remaining_height * 0.5;
+        let rsi_area_height = remaining_height * 0.4;
+        
 
         // 차트 영역 계산
-        let price_area_end = top_margin + price_chart_height;
+        let price_area_end = margin + price_chart_height;
         let volume_area_start = price_area_end + charts_gap;
-        let volume_area_end = volume_area_start + volume_height;
+        let volume_area_end = volume_area_start + volume_area_height;
         let rsi_area_start = volume_area_end + charts_gap;
-        let rsi_area_end = rsi_area_start + rsi_height;
+        let rsi_area_end = bounds.height - bottom_margin;
 
         // 배경 그리기
         frame.fill_rectangle(
@@ -1116,14 +1117,18 @@ impl<Message> Program<Message> for Chart {
             .fold(0.0, f32::max);
 
         // 캔들스틱 크기 계산
-        let candle_count = self.candlesticks.len() as f32;
         let available_width = bounds.width - left_margin - right_margin;
-        let fixed_candle_width = match self.candle_type {
-            CandleType::Minute1 => (available_width / candle_count).min(8.0),
-            CandleType::Minute3 => (available_width / candle_count).min(10.0),
-            CandleType::Day => (available_width / candle_count).min(15.0),
+        let candles_per_screen = 1000; // 한 화면에 보여줄 캔들 수
+
+        let base_candle_width = match self.candle_type {
+            CandleType::Minute1 => 6.0,  // 1분봉 크기 증가
+            CandleType::Minute3 => 6.0,  // 3분봉 크기 증가
+            CandleType::Day => 6.,
         };
-        let body_width = fixed_candle_width * 0.8;
+
+        // 보이는 캔들 수 계산
+        let visible_candles = candles_per_screen;
+        let body_width = base_candle_width * 0.8;
 
         // 스케일링 계산
         let price_diff = (max_price - min_price).max(f32::EPSILON);
@@ -1154,13 +1159,19 @@ impl<Message> Program<Message> for Chart {
             });
         }
 
-        // 캔들스틱과 거래량 바 그리기
-        for (i, (timestamp, candlestick)) in self.candlesticks.iter().enumerate() {
-            let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
+        // 현재 스크롤 위치 계산
+        let scroll_offset = (-state.offset / base_candle_width) as usize;
 
-            if x < -fixed_candle_width || x > bounds.width {
-                continue;
-            }
+        // 보이는 캔들스틱만 선택
+        let visible_candlesticks: Vec<(&u64, &Candlestick)> = self
+            .candlesticks
+            .iter()
+            .skip(scroll_offset)
+            .take(candles_per_screen)
+            .collect();
+        // 캔들스틱과 거래량 바 그리기
+        for (i, (timestamp, candlestick)) in visible_candlesticks.iter().enumerate() {
+            let x = left_margin + (i as f32 * base_candle_width) + state.offset;
 
             let color = if candlestick.close >= candlestick.open {
                 Color::from_rgb(0.8, 0.0, 0.0)
@@ -1226,7 +1237,7 @@ impl<Message> Program<Message> for Chart {
 
                 frame.fill_text(canvas::Text {
                     content: time_str,
-                    position: Point::new(x - 15.0, bounds.height - 5.0),
+                    position: Point::new(x - 15.0, bounds.height - bottom_margin + 15.0),  // 위치 조정
                     color: Color::from_rgb(0.7, 0.7, 0.7),
                     size: Pixels(10.0),
                     ..canvas::Text::default()
@@ -1268,14 +1279,10 @@ impl<Message> Program<Message> for Chart {
             let mut rsi_path_builder = canvas::path::Builder::new();
             let mut first_rsi = true;
 
-            for (i, (timestamp, _)) in self.candlesticks.iter().enumerate() {
+            for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
                 if let Some(&rsi) = self.rsi_values.get(timestamp) {
-                    let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
+                    let x = left_margin + (i as f32 * base_candle_width) + state.offset;
                     let rsi_y = rsi_area_start + (rsi_height * (1.0 - (rsi / 100.0)));
-
-                    if x < -fixed_candle_width || x > bounds.width {
-                        continue;
-                    }
 
                     if first_rsi {
                         rsi_path_builder.move_to(Point::new(x + body_width / 2.0, rsi_y));
@@ -1324,14 +1331,10 @@ impl<Message> Program<Message> for Chart {
                 let mut path_builder = canvas::path::Builder::new();
                 let mut first = true;
 
-                for (i, (timestamp, _)) in self.candlesticks.iter().enumerate() {
+                for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
                     if let Some(&ma_price) = values.get(timestamp) {
-                        let x = left_margin + (i as f32 * fixed_candle_width) + state.offset;
+                        let x = left_margin + (i as f32 * base_candle_width) + state.offset;
                         let y = top_margin + ((max_price - ma_price) * y_scale);
-
-                        if x < -fixed_candle_width || x > bounds.width + fixed_candle_width {
-                            continue;
-                        }
 
                         if first {
                             path_builder.move_to(Point::new(x, y));
@@ -1423,13 +1426,18 @@ where
 async fn fetch_candles_async(
     market: &str,
     candle_type: &CandleType,
-    to_date: Option<String>, // 추가: 특정 날짜부터 이전 데이터를 가져오기 위한 파라미터
+    to_date: Option<String>,
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
-    // 바이낸스 API 엔드포인트
     let count = match candle_type {
-        CandleType::Day => 100,
-        CandleType::Minute1 => 60 * 24 * 3,
-        CandleType::Minute3 => (60 / 3) * 24 * 3,
+        CandleType::Day => 1000,
+        CandleType::Minute1 => 1000,
+        CandleType::Minute3 => 1000,
+    };
+
+    // market 형식 변환 (KRW-BTC -> BTCUSDT)
+    let binance_symbol = match market.split('-').last() {
+        Some(symbol) => format!("{}USDT", symbol),
+        None => "BTCUSDT".to_string(),
     };
 
     let interval = match candle_type {
@@ -1437,14 +1445,14 @@ async fn fetch_candles_async(
         CandleType::Minute3 => "3m",
         CandleType::Day => "1d",
     };
-    let market = "BTCUSDT";
+
     let url = format!(
         "https://api.binance.com/api/v3/klines?symbol={}&interval={}&limit={}",
-        market, interval, count
+        binance_symbol, interval, count
     );
 
     println!("Requesting URL: {}", url);
-    println!("Fetching {} candles for {}", count, candle_type);
+    println!("데이터를 가져오는 중... 요청된 캔들 수: {}", count);
 
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await?;
@@ -1456,11 +1464,11 @@ async fn fetch_candles_async(
     }
 
     let text = response.text().await?;
-    println!("Response text sample: {:.200}...", text);
-
     let candles: Vec<BinanceCandle> = serde_json::from_str(&text)?;
 
-    let mut result: BTreeMap<u64, Candlestick> = candles
+    println!("실제로 받은 캔들 수: {}", candles.len()); // 디버깅용 출력 추가
+
+    let result: BTreeMap<u64, Candlestick> = candles
         .into_iter()
         .filter(|candle| {
             candle.open.parse::<f32>().unwrap_or(0.0) > 0.0
@@ -1482,7 +1490,7 @@ async fn fetch_candles_async(
         })
         .collect();
 
-    println!("Final processed candles count: {}", result.len());
+    println!("최종 처리된 캔들 수: {}", result.len());
 
     if result.is_empty() {
         Err("No valid candles returned".into())
