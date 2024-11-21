@@ -37,10 +37,17 @@ struct CoinInfo {
     price: f64,
     change_percent: f64,
 }
-
+// 새로 추가할 구조체
+struct CandleBuffer {
+    visible_count: usize,  // 화면에 보이는 캔들 수
+    buffer_size: usize,    // 버퍼 크기
+    latest_timestamp: u64, // 가장 최신 데이터 시간
+    oldest_timestamp: u64, // 가장 오래된 데이터 시간
+    loading: bool,         // 데이터 로딩 중 여부
+}
 #[derive(Debug, Clone)]
 pub enum Message {
-    AddCandlestick((u64, UpbitTrade)),
+    AddCandlestick((u64, BinanceTrade)),
     RemoveCandlestick,
     SelectCoin(String),
     UpdateCoinPrice(String, f64, f64),
@@ -54,6 +61,7 @@ pub enum Message {
     ToggleMA200,
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
+    New,
 }
 
 struct RTarde {
@@ -231,18 +239,24 @@ impl Default for RTarde {
 #[derive(Debug, Deserialize, Clone)]
 struct UpbitTrade {
     #[serde(rename = "type")]
-    trade_type: String,
     code: String,
     timestamp: u64,
     trade_price: f64,
     trade_volume: f64,
-    ask_bid: String,
-    sequential_id: u64,
-    prev_closing_price: f64,
-    change: String,
-    change_price: f64,
-    stream_type: String,
 }
+#[derive(Debug, Deserialize, Clone)]
+struct BinanceTrade {
+    e: String, // Event type
+    s: String, // Symbol
+    t: u64,    // Trade time
+    p: String, // Price
+    q: String, // Quantity
+    b: u64,    // Buyer order id
+    a: u64,    // Seller order id
+    T: u64,    // Trade time
+    m: bool,   // Is the buyer the market maker?
+}
+
 fn calculate_moving_average(
     candlesticks: &BTreeMap<u64, Candlestick>,
     period: usize,
@@ -311,8 +325,7 @@ fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BT
 
     rsi_values
 }
-
-fn upbit_connection() -> impl Stream<Item = Message> {
+fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
         let url = Url::parse("wss://api.upbit.com/websocket/v1").unwrap();
         let (tx, mut rx) = mpsc::channel(100);
@@ -354,15 +367,16 @@ fn upbit_connection() -> impl Stream<Item = Message> {
                         Some(Ok(message)) = ws_stream.next() => {
                             match message {
                                 ME::Binary(binary_content) => {
-                                    if let Ok(trade) = serde_json::from_slice::<UpbitTrade>(&binary_content) {
+                                    if let Ok(trade) = serde_json::from_slice::<BinanceTrade>(&binary_content) {
+
                                         // 가격 업데이트와 캔들스틱 업데이트를 동시에 전송
-                                        let symbol = trade.code.replace("KRW-", "");
+                                        let symbol = trade.s.replace("USDT", "");
                                         yield Message::UpdatePrice(
                                             symbol.clone(),
-                                            trade.trade_price,
+                                            trade.p.parse::<f64>().unwrap(),
                                             0.0,  // 변동률은 별도 계산 필요
                                         );
-                                        yield Message::AddCandlestick((trade.timestamp, trade));
+                                        yield Message::AddCandlestick((trade.t, trade));
                                     }
                                 }
                                 _ => continue,
@@ -377,6 +391,73 @@ fn upbit_connection() -> impl Stream<Item = Message> {
         }
     }
 }
+
+// fn upbit_connection() -> impl Stream<Item = Message> {
+//     stream! {
+//         let url = Url::parse("wss://api.upbit.com/websocket/v1").unwrap();
+//         let (tx, mut rx) = mpsc::channel(100);
+
+//         yield Message::WebSocketInit(tx.clone());
+
+//         loop {
+//             if let Ok((mut ws_stream, _)) = connect_async(url.clone()).await {
+//                 let initial_subscribe = json!([
+//                     {"ticket":"test"},
+//                     {
+//                         "type":"trade",    // 실시간 체결 데이터 구독
+//                         "codes":["KRW-BTC"],
+//                         "isOnlyRealtime": true
+//                     }
+//                 ]).to_string();
+
+//                 if let Err(_) = ws_stream.send(ME::Text(initial_subscribe)).await {
+//                     continue;
+//                 }
+
+//                 loop {
+//                     tokio::select! {
+//                         Some(new_coin) = rx.next() => {
+//                             let subscribe_message = json!([
+//                                 {"ticket":"test"},
+//                                 {
+//                                     "type":"trade",
+//                                     "codes":[format!("KRW-{}", new_coin)],
+//                                     "isOnlyRealtime": true
+//                                 }
+//                             ]).to_string();
+
+//                             if let Err(_) = ws_stream.send(ME::Text(subscribe_message)).await {
+//                                 break;
+//                             }
+//                             println!("Subscribed to {}", new_coin);
+//                         }
+//                         Some(Ok(message)) = ws_stream.next() => {
+//                             match message {
+//                                 ME::Binary(binary_content) => {
+//                                     if let Ok(trade) = serde_json::from_slice::<UpbitTrade>(&binary_content) {
+
+//                                         // 가격 업데이트와 캔들스틱 업데이트를 동시에 전송
+//                                         let symbol = trade.code.replace("KRW-", "");
+//                                         yield Message::UpdatePrice(
+//                                             symbol.clone(),
+//                                             trade.trade_price,
+//                                             0.0,  // 변동률은 별도 계산 필요
+//                                         );
+//                                         yield Message::AddCandlestick((trade.timestamp, trade));
+//                                     }
+//                                 }
+//                                 _ => continue,
+//                             }
+//                         }
+//                         else => break,
+//                     }
+//                 }
+//             }
+//             yield Message::Error;
+//             tokio::time::sleep(Duration::from_secs(1)).await;
+//         }
+//     }
+// }
 impl RTarde {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
@@ -385,11 +466,9 @@ impl RTarde {
         ])
     }
     fn websocket_subscription(&self) -> Subscription<Message> {
-        Subscription::run(upbit_connection)
+        Subscription::run(binance_connection)
     }
-    fn theme(&self) -> Theme {
-        Theme::TokyoNight
-    }
+
     pub fn view(&self) -> Element<Message> {
         let ma_controls = Container::new(
             Column::new()
@@ -669,6 +748,9 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::New => {
+                println!("{}", "새로운");
+            }
             Message::LoadMoreCandles => {
                 if !self.loading_more {
                     // 가장 오래된 캔들의 날짜를 찾아서 to 파라미터로 사용
@@ -746,11 +828,10 @@ impl RTarde {
                 }
             }
             Message::UpdatePrice(symbol, price, change_rate) => {
+                println!("업데이트");
                 if let Some(info) = self.coin_list.get_mut(&symbol) {
                     info.price = price;
                     info.change_percent = change_rate;
-                    println!("Updated price for {}: {} ({}%)", symbol, price, change_rate);
-                    // 디버그용
                 }
             }
             Message::WebSocketInit(sender) => {
@@ -807,7 +888,7 @@ impl RTarde {
                 let (timestamp, trade_data) = trade;
                 let current_market = format!("KRW-{}", self.selected_coin);
 
-                if trade_data.code != current_market {
+                if trade_data.s != current_market {
                     return;
                 }
 
@@ -822,7 +903,7 @@ impl RTarde {
                     }
                 };
 
-                let trade_price = trade_data.trade_price as f32;
+                let trade_price = trade_data.p.parse::<f32>().unwrap();
 
                 // 최신 캔들스틱과 비교
                 let latest_timestamp = self.candlesticks.keys().next_back().cloned();
@@ -835,12 +916,14 @@ impl RTarde {
                             high: trade_price,
                             low: trade_price,
                             close: trade_price,
-                            volume: trade_data.trade_volume as f32, // 초기 거래량 설정
+                            volume: trade_data.q.parse::<f32>().unwrap(),
                         };
                         self.candlesticks.insert(candle_timestamp, new_candlestick);
                         println!(
                             "New candlestick at: {} price: {}, volume: {}",
-                            candle_timestamp, trade_price, trade_data.trade_volume
+                            candle_timestamp,
+                            trade_price,
+                            trade_data.q.parse::<f32>().unwrap(),
                         );
 
                         // 오래된 캔들 제거
@@ -855,11 +938,12 @@ impl RTarde {
                             current_candle.high = current_candle.high.max(trade_price);
                             current_candle.low = current_candle.low.min(trade_price);
                             current_candle.close = trade_price;
-                            current_candle.volume += trade_data.trade_volume as f32; // 거래량 누적
-                            println!(
-                                "Updated candlestick: close {}, volume {}",
-                                trade_price, current_candle.volume
-                            );
+                            current_candle.volume += trade_data.q.parse::<f32>().unwrap()
+                            // 거래량 누적
+                            // println!(
+                            //     "Updated candlestick: close {}, volume {}",
+                            //     trade_price, current_candle.volume
+                            // );
                         }
                     }
                 } else {
@@ -869,7 +953,7 @@ impl RTarde {
                         high: trade_price,
                         low: trade_price,
                         close: trade_price,
-                        volume: trade_data.trade_volume as f32, // 초기 거래량 설정
+                        volume: trade_data.q.parse::<f32>().unwrap(),
                     };
                     self.candlesticks.insert(candle_timestamp, new_candlestick);
                 }
@@ -890,7 +974,7 @@ impl RTarde {
     }
 }
 
-impl<T> Program<T> for Chart {
+impl<Message> Program<Message> for Chart {
     type State = ChartState;
 
     fn update(
@@ -899,7 +983,7 @@ impl<T> Program<T> for Chart {
         event: Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (event::Status, Option<T>) {
+    ) -> (event::Status, Option<Message>) {
         let cursor_position = if let Some(position) = cursor.position() {
             position
         } else {
@@ -919,26 +1003,25 @@ impl<T> Program<T> for Chart {
                     state.dragging = false;
                     (event::Status::Captured, None)
                 }
-                mouse::Event::CursorMoved { .. } => {
-                    if state.dragging {
-                        let delta_x = cursor_position.x - state.drag_start.x;
-                        let new_offset = state.last_offset + delta_x;
+                // mouse::Event::CursorMoved { .. } => {
+                //     if state.dragging {
+                //         let delta_x = cursor_position.x - state.drag_start.x; // 드래그 방향과 크기
+                //         let new_offset = state.last_offset + delta_x;
+                //         println!("{}", cursor_position.x);
+                //         // 드래그가 좌로 이동했을 때 처리 (delta_x < 0)
+                //         if delta_x < 0.0 && new_offset < state.offset && !state.need_more_data {
+                //             println!("{}", "좌로 드래그 - 이전 데이터 로드 필요");
 
-                        // 드래그 거리가 양수이면서 이전 오프셋보다 큰 경우에만 LoadMoreCandles 메시지 발생
-                        if new_offset > state.offset && new_offset > 500.0 && !state.need_more_data
-                        {
-                            println!("Requesting more candles... Offset: {}", new_offset);
-                            state.need_more_data = true;
-                            // LoadMoreCandles 메시지를 직접 생성할 수 없으므로
-                            // state의 need_more_data 플래그를 사용하여 RTarde에서 처리
-                        }
+                //             state.need_more_data = true; // 데이터를 요청해야 한다는 플래그 설정
+                //         }
 
-                        state.offset = new_offset;
-                        (event::Status::Captured, None)
-                    } else {
-                        (event::Status::Ignored, None)
-                    }
-                }
+                //         // 새로운 오프셋 업데이트
+                //         state.offset = new_offset;
+                //         (event::Status::Captured, None)
+                //     } else {
+                //         (event::Status::Ignored, None)
+                //     }
+                // }
                 _ => (event::Status::Ignored, None),
             },
             _ => (event::Status::Ignored, None),
@@ -954,7 +1037,7 @@ impl<T> Program<T> for Chart {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         if state.need_more_data {
-            println!("Need more data flag is set!");
+            // println!("Need more data flag is set!");
             // RTarde에서 이 상태를 체크하고 데이터를 로드하도록 함
         }
         let mut frame = canvas::Frame::new(renderer, bounds.size());
@@ -1280,41 +1363,43 @@ fn main() -> iced::Result {
 }
 #[derive(Debug, Deserialize, Clone)]
 struct UpbitCandle {
-    candle_acc_trade_price: f32,
     candle_acc_trade_volume: f32,
-    candle_date_time_kst: String,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    change_price: f32,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    change_rate: f32,
+
     #[serde(deserialize_with = "deserialize_f32_or_null")]
     high_price: f32,
     #[serde(deserialize_with = "deserialize_f32_or_null")]
     low_price: f32,
     #[serde(deserialize_with = "deserialize_f32_or_null")]
     opening_price: f32,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    prev_closing_price: f32,
+
     timestamp: u64,
     #[serde(deserialize_with = "deserialize_f32_or_null")]
     trade_price: f32,
-    unit: Option<i32>, // 분봉 데이터일 경우 분 단위
 }
 #[derive(Debug, Deserialize, Clone)]
 struct UpbitMinuteCandle {
-    market: String,
-    candle_date_time_utc: String,
-    candle_date_time_kst: String,
     opening_price: f64,
     high_price: f64,
     low_price: f64,
     trade_price: f64,
     timestamp: u64,
-    candle_acc_trade_price: f64,
     candle_acc_trade_volume: f64,
-    unit: i32, // 분봉 단위(1, 2, ...)
 }
-
+#[derive(Debug, Deserialize, Clone)]
+struct BinanceCandle {
+    open_time: u64,
+    open: String,
+    high: String,
+    low: String,
+    close: String,
+    volume: String,
+    close_time: u64,
+    quote_asset_volume: String,
+    number_of_trades: u32,
+    taker_buy_base_asset_volume: String,
+    taker_buy_quote_asset_volume: String,
+    ignore: String,
+}
 fn deserialize_f32_or_null<'de, D>(deserializer: D) -> Result<f32, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1340,45 +1425,29 @@ async fn fetch_candles_async(
     candle_type: &CandleType,
     to_date: Option<String>, // 추가: 특정 날짜부터 이전 데이터를 가져오기 위한 파라미터
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
-    // 봉 종류에 따라 가져올 데이터 수 계산
+    // 바이낸스 API 엔드포인트
     let count = match candle_type {
-        CandleType::Day => 200,
+        CandleType::Day => 100,
         CandleType::Minute1 => 60 * 24 * 3,
         CandleType::Minute3 => (60 / 3) * 24 * 3,
     };
-    let url = match candle_type {
-        CandleType::Minute1 => format!(
-            "https://api.upbit.com/v1/candles/minutes/1?market={}&count={}",
-            market, count
-        ),
-        CandleType::Minute3 => format!(
-            "https://api.upbit.com/v1/candles/minutes/3?market={}&count={}",
-            market, count
-        ),
-        CandleType::Day => {
-            if let Some(date) = to_date {
-                format!(
-                    "https://api.upbit.com/v1/candles/days?market={}&count=200&to={}",
-                    market, date
-                )
-            } else {
-                format!(
-                    "https://api.upbit.com/v1/candles/days?market={}&count=200",
-                    market
-                )
-            }
-        }
+
+    let interval = match candle_type {
+        CandleType::Minute1 => "1m",
+        CandleType::Minute3 => "3m",
+        CandleType::Day => "1d",
     };
+    let market = "BTCUSDT";
+    let url = format!(
+        "https://api.binance.com/api/v3/klines?symbol={}&interval={}&limit={}",
+        market, interval, count
+    );
 
     println!("Requesting URL: {}", url);
     println!("Fetching {} candles for {}", count, candle_type);
 
     let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
+    let response = client.get(&url).send().await?;
 
     if !response.status().is_success() {
         let error_msg = format!("API error: {}", response.status());
@@ -1389,62 +1458,29 @@ async fn fetch_candles_async(
     let text = response.text().await?;
     println!("Response text sample: {:.200}...", text);
 
-    let mut result: BTreeMap<u64, Candlestick> = match candle_type {
-        CandleType::Minute1 | CandleType::Minute3 => {
-            let candles: Vec<UpbitMinuteCandle> = serde_json::from_str(&text)?;
-            let mut sorted_candles = candles;
-            sorted_candles.sort_by_key(|c| c.timestamp);
+    let candles: Vec<BinanceCandle> = serde_json::from_str(&text)?;
 
-            sorted_candles
-                .into_iter()
-                .filter(|candle| {
-                    candle.opening_price > 0.0
-                        && candle.high_price > 0.0
-                        && candle.low_price > 0.0
-                        && candle.trade_price > 0.0
-                })
-                .map(|candle| {
-                    (
-                        candle.timestamp,
-                        Candlestick {
-                            open: candle.opening_price as f32,
-                            high: candle.high_price as f32,
-                            low: candle.low_price as f32,
-                            close: candle.trade_price as f32,
-                            volume: candle.candle_acc_trade_volume as f32,
-                        },
-                    )
-                })
-                .collect()
-        }
-        CandleType::Day => {
-            let candles: Vec<UpbitCandle> = serde_json::from_str(&text)?;
-            let mut sorted_candles = candles;
-            sorted_candles.sort_by_key(|c| c.timestamp);
-
-            sorted_candles
-                .into_iter()
-                .filter(|candle| {
-                    candle.opening_price > 0.0
-                        && candle.high_price > 0.0
-                        && candle.low_price > 0.0
-                        && candle.trade_price > 0.0
-                })
-                .map(|candle| {
-                    (
-                        candle.timestamp,
-                        Candlestick {
-                            open: candle.opening_price,
-                            high: candle.high_price,
-                            low: candle.low_price,
-                            close: candle.trade_price,
-                            volume: candle.candle_acc_trade_volume,
-                        },
-                    )
-                })
-                .collect()
-        }
-    };
+    let mut result: BTreeMap<u64, Candlestick> = candles
+        .into_iter()
+        .filter(|candle| {
+            candle.open.parse::<f32>().unwrap_or(0.0) > 0.0
+                && candle.high.parse::<f32>().unwrap_or(0.0) > 0.0
+                && candle.low.parse::<f32>().unwrap_or(0.0) > 0.0
+                && candle.close.parse::<f32>().unwrap_or(0.0) > 0.0
+        })
+        .map(|candle| {
+            (
+                candle.open_time,
+                Candlestick {
+                    open: candle.open.parse().unwrap_or(0.0),
+                    high: candle.high.parse().unwrap_or(0.0),
+                    low: candle.low.parse().unwrap_or(0.0),
+                    close: candle.close.parse().unwrap_or(0.0),
+                    volume: candle.volume.parse().unwrap_or(0.0),
+                },
+            )
+        })
+        .collect();
 
     println!("Final processed candles count: {}", result.len());
 
