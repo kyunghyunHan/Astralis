@@ -25,7 +25,11 @@ use async_stream::stream;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME}; // 여기에 Message를 임포트
-
+#[derive(Debug, Clone)]
+pub enum ScrollDirection {
+    Left,
+    Right,
+}
 #[derive(Debug, Clone)]
 struct CoinInfo {
     symbol: String,
@@ -48,22 +52,25 @@ pub enum Message {
     ToggleMA10,
     ToggleMA20,
     ToggleMA200,
+    LoadMoreCandles,                               // 추가
+    MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
 }
 
 struct RTarde {
     timer_enabled: bool,
     candlesticks: BTreeMap<u64, Candlestick>,
     selected_coin: String,
-    selected_candle_type: CandleType, // 선택된 봉 타입 추가
+    selected_candle_type: CandleType,
     coin_list: HashMap<String, CoinInfo>,
     auto_scroll: bool,
     ws_sender: Option<mpsc::Sender<String>>,
-    show_ma5: bool,   // 5일 이동평균선 표시 여부
-    show_ma10: bool,  // 10일 이동평균선 표시 여부
-    show_ma20: bool,  // 20일 이동평균선 표시 여부
-    show_ma200: bool, // 200일 이동평균선 표시 여부
+    show_ma5: bool,
+    show_ma10: bool,
+    show_ma20: bool,
+    show_ma200: bool,
+    loading_more: bool,          // 추가: 데이터 로딩 중인지 여부
+    oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
 }
-
 // Candlestick 구조체 업데이트
 #[derive(Debug, Clone)]
 struct Candlestick {
@@ -106,8 +113,10 @@ struct ChartState {
     dragging: bool,
     drag_start: Point,
     last_offset: f32,
-    auto_scroll: bool, // 자동 스크롤 상태 추가
+    auto_scroll: bool,
+    need_more_data: bool, // 추가
 }
+
 use serde_json::json;
 struct Chart {
     candlesticks: BTreeMap<u64, Candlestick>,
@@ -123,8 +132,9 @@ struct Chart {
     ma20_values: BTreeMap<u64, f32>,
     ma200_values: BTreeMap<u64, f32>,
     rsi_values: BTreeMap<u64, f32>,
-    show_rsi: bool, // RSI 표시 여부
+    show_rsi: bool,
 }
+
 impl Chart {
     fn new(
         candlesticks: BTreeMap<u64, Candlestick>,
@@ -181,7 +191,7 @@ impl Chart {
             ma20_values,
             ma200_values,
             rsi_values,
-            show_rsi: true, // 기본적으로 RSI 표시
+            show_rsi: true,
         }
     }
 }
@@ -201,7 +211,7 @@ impl Default for RTarde {
             );
         }
         Self {
-            candlesticks: fetch_candles("KRW-BTC", &CandleType::Day).unwrap_or_default(),
+            candlesticks: fetch_candles("KRW-BTC", &CandleType::Day, None).unwrap_or_default(),
             timer_enabled: true,
             selected_coin: "BTC".to_string(),
             selected_candle_type: CandleType::Day,
@@ -212,6 +222,8 @@ impl Default for RTarde {
             show_ma10: false,
             show_ma20: false,
             show_ma200: false,
+            loading_more: false,
+            oldest_date: None,
         }
     }
 }
@@ -367,7 +379,12 @@ fn upbit_connection() -> impl Stream<Item = Message> {
 }
 impl RTarde {
     pub fn subscription(&self) -> Subscription<Message> {
-        // 실시간 데이터 구독
+        Subscription::batch([
+            // 기존 subscription
+            self.websocket_subscription(),
+        ])
+    }
+    fn websocket_subscription(&self) -> Subscription<Message> {
         Subscription::run(upbit_connection)
     }
     fn theme(&self) -> Theme {
@@ -652,6 +669,37 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::LoadMoreCandles => {
+                if !self.loading_more {
+                    // 가장 오래된 캔들의 날짜를 찾아서 to 파라미터로 사용
+                    if let Some((&oldest_timestamp, _)) = self.candlesticks.iter().next() {
+                        self.loading_more = true;
+                        let datetime = chrono::NaiveDateTime::from_timestamp_opt(
+                            (oldest_timestamp / 1000) as i64,
+                            0,
+                        )
+                        .unwrap();
+                        let date_str = datetime.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+                        // 클론해서 async 클로저에 전달
+                        let market = format!("KRW-{}", self.selected_coin);
+                        let candle_type = self.selected_candle_type.clone();
+
+                        let runtime = tokio::runtime::Handle::current();
+                        runtime.spawn(async move {
+                            match fetch_candles_async(&market, &candle_type, Some(date_str)).await {
+                                Ok(new_candles) => Message::MoreCandlesLoaded(new_candles),
+                                Err(_) => Message::Error,
+                            }
+                        });
+                    }
+                }
+            }
+            Message::MoreCandlesLoaded(new_candles) => {
+                if !new_candles.is_empty() {
+                    self.candlesticks.append(&mut new_candles.clone());
+                }
+            }
             Message::ToggleMA5 => self.show_ma5 = !self.show_ma5,
             Message::ToggleMA10 => self.show_ma10 = !self.show_ma10,
             Message::ToggleMA20 => self.show_ma20 = !self.show_ma20,
@@ -667,7 +715,8 @@ impl RTarde {
                     market, candle_type
                 );
 
-                match fetch_candles(&market, &candle_type) {
+                match fetch_candles(&market, &candle_type, None) {
+                    // None을 추가하여 최신 데이터부터 가져오기
                     Ok(candles) => {
                         println!(
                             "Successfully fetched {} candles for {}",
@@ -675,6 +724,20 @@ impl RTarde {
                             candle_type
                         );
                         self.candlesticks = candles;
+
+                        // 가장 오래된 캔들의 날짜 저장
+                        if let Some((&timestamp, _)) = self.candlesticks.iter().next() {
+                            let datetime = chrono::NaiveDateTime::from_timestamp_opt(
+                                (timestamp / 1000) as i64,
+                                0,
+                            )
+                            .unwrap();
+                            self.oldest_date =
+                                Some(datetime.format("%Y-%m-%dT%H:%M:%S").to_string());
+                        } else {
+                            self.oldest_date = None;
+                        }
+
                         self.auto_scroll = true;
                     }
                     Err(e) => {
@@ -693,14 +756,12 @@ impl RTarde {
             Message::WebSocketInit(sender) => {
                 self.ws_sender = Some(sender);
             }
-
             Message::SelectCoin(symbol) => {
                 println!("Switching to coin: {}", symbol);
                 self.selected_coin = symbol.clone();
                 self.candlesticks.clear();
 
-                // 새로운 코인의 캔들스틱 데이터 불러오기
-                match fetch_candles(&format!("KRW-{}", symbol), &self.selected_candle_type) {
+                match fetch_candles(&format!("KRW-{}", symbol), &self.selected_candle_type, None) {
                     Ok(candles) => {
                         if candles.is_empty() {
                             println!("Warning: No candles received for {}", symbol);
@@ -711,6 +772,17 @@ impl RTarde {
                                 symbol
                             );
                             self.candlesticks = candles;
+
+                            // 가장 오래된 캔들의 날짜 저장
+                            if let Some((&timestamp, _)) = self.candlesticks.iter().next() {
+                                let datetime = chrono::NaiveDateTime::from_timestamp_opt(
+                                    (timestamp / 1000) as i64,
+                                    0,
+                                )
+                                .unwrap();
+                                self.oldest_date =
+                                    Some(datetime.format("%Y-%m-%dT%H:%M:%S").to_string());
+                            }
                         }
                     }
                     Err(e) => {
@@ -818,7 +890,7 @@ impl RTarde {
     }
 }
 
-impl<Message> Program<Message> for Chart {
+impl<T> Program<T> for Chart {
     type State = ChartState;
 
     fn update(
@@ -827,7 +899,7 @@ impl<Message> Program<Message> for Chart {
         event: Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (event::Status, Option<Message>) {
+    ) -> (event::Status, Option<T>) {
         let cursor_position = if let Some(position) = cursor.position() {
             position
         } else {
@@ -850,7 +922,18 @@ impl<Message> Program<Message> for Chart {
                 mouse::Event::CursorMoved { .. } => {
                     if state.dragging {
                         let delta_x = cursor_position.x - state.drag_start.x;
-                        state.offset = state.last_offset + delta_x;
+                        let new_offset = state.last_offset + delta_x;
+
+                        // 드래그 거리가 양수이면서 이전 오프셋보다 큰 경우에만 LoadMoreCandles 메시지 발생
+                        if new_offset > state.offset && new_offset > 500.0 && !state.need_more_data
+                        {
+                            println!("Requesting more candles... Offset: {}", new_offset);
+                            state.need_more_data = true;
+                            // LoadMoreCandles 메시지를 직접 생성할 수 없으므로
+                            // state의 need_more_data 플래그를 사용하여 RTarde에서 처리
+                        }
+
+                        state.offset = new_offset;
                         (event::Status::Captured, None)
                     } else {
                         (event::Status::Ignored, None)
@@ -861,6 +944,7 @@ impl<Message> Program<Message> for Chart {
             _ => (event::Status::Ignored, None),
         }
     }
+
     fn draw(
         &self,
         state: &Self::State,
@@ -869,6 +953,10 @@ impl<Message> Program<Message> for Chart {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
+        if state.need_more_data {
+            println!("Need more data flag is set!");
+            // RTarde에서 이 상태를 체크하고 데이터를 로드하도록 함
+        }
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         if self.candlesticks.is_empty() {
             return vec![frame.into_geometry()];
@@ -1066,7 +1154,11 @@ impl<Message> Program<Message> for Chart {
         // RSI 그리기
         if self.show_rsi {
             // RSI 기준선 그리기
-            let rsi_levels = [(70.0, "overbought"), (50.0, "neutrality"), (30.0, "oversold")];
+            let rsi_levels = [
+                (70.0, "overbought"),
+                (50.0, "neutrality"),
+                (30.0, "oversold"),
+            ];
             for (level, label) in rsi_levels.iter() {
                 let y = rsi_area_start + (rsi_height * (1.0 - (level / 100.0)));
 
@@ -1246,23 +1338,40 @@ where
 async fn fetch_candles_async(
     market: &str,
     candle_type: &CandleType,
+    to_date: Option<String>, // 추가: 특정 날짜부터 이전 데이터를 가져오기 위한 파라미터
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
+    // 봉 종류에 따라 가져올 데이터 수 계산
+    let count = match candle_type {
+        CandleType::Day => 200,
+        CandleType::Minute1 => 60 * 24 * 3,
+        CandleType::Minute3 => (60 / 3) * 24 * 3,
+    };
     let url = match candle_type {
         CandleType::Minute1 => format!(
-            "https://api.upbit.com/v1/candles/minutes/1?market={}&count=200",
-            market
+            "https://api.upbit.com/v1/candles/minutes/1?market={}&count={}",
+            market, count
         ),
         CandleType::Minute3 => format!(
-            "https://api.upbit.com/v1/candles/minutes/3?market={}&count=200",
-            market
+            "https://api.upbit.com/v1/candles/minutes/3?market={}&count={}",
+            market, count
         ),
-        CandleType::Day => format!(
-            "https://api.upbit.com/v1/candles/days?market={}&count=200",
-            market
-        ),
+        CandleType::Day => {
+            if let Some(date) = to_date {
+                format!(
+                    "https://api.upbit.com/v1/candles/days?market={}&count=200&to={}",
+                    market, date
+                )
+            } else {
+                format!(
+                    "https://api.upbit.com/v1/candles/days?market={}&count=200",
+                    market
+                )
+            }
+        }
     };
 
     println!("Requesting URL: {}", url);
+    println!("Fetching {} candles for {}", count, candle_type);
 
     let client = reqwest::Client::new();
     let response = client
@@ -1302,7 +1411,7 @@ async fn fetch_candles_async(
                             high: candle.high_price as f32,
                             low: candle.low_price as f32,
                             close: candle.trade_price as f32,
-                            volume: candle.candle_acc_trade_volume as f32, // 거래량 추가
+                            volume: candle.candle_acc_trade_volume as f32,
                         },
                     )
                 })
@@ -1329,7 +1438,7 @@ async fn fetch_candles_async(
                             high: candle.high_price,
                             low: candle.low_price,
                             close: candle.trade_price,
-                            volume: candle.candle_acc_trade_volume, // 거래량 추가
+                            volume: candle.candle_acc_trade_volume,
                         },
                     )
                 })
@@ -1345,12 +1454,15 @@ async fn fetch_candles_async(
         Ok(result)
     }
 }
-
 fn fetch_candles(
     market: &str,
     candle_type: &CandleType,
+    to_date: Option<String>, // 추가
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
     println!("Fetching {:?} candles for market: {}", candle_type, market);
-    rt.block_on(fetch_candles_async(market, candle_type))
+    if let Some(date) = &to_date {
+        println!("From date: {}", date);
+    }
+    rt.block_on(fetch_candles_async(market, candle_type, to_date))
 }
