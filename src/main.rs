@@ -45,6 +45,45 @@ struct CandleBuffer {
     oldest_timestamp: u64, // 가장 오래된 데이터 시간
     loading: bool,         // 데이터 로딩 중 여부
 }
+#[derive(Debug, Deserialize, Clone)]
+struct UpbitCandle {
+    candle_acc_trade_volume: f32,
+
+    #[serde(deserialize_with = "deserialize_f32_or_null")]
+    high_price: f32,
+    #[serde(deserialize_with = "deserialize_f32_or_null")]
+    low_price: f32,
+    #[serde(deserialize_with = "deserialize_f32_or_null")]
+    opening_price: f32,
+
+    timestamp: u64,
+    #[serde(deserialize_with = "deserialize_f32_or_null")]
+    trade_price: f32,
+}
+#[derive(Debug, Deserialize, Clone)]
+struct UpbitMinuteCandle {
+    opening_price: f64,
+    high_price: f64,
+    low_price: f64,
+    trade_price: f64,
+    timestamp: u64,
+    candle_acc_trade_volume: f64,
+}
+#[derive(Debug, Deserialize, Clone)]
+struct BinanceCandle {
+    open_time: u64,
+    open: String,
+    high: String,
+    low: String,
+    close: String,
+    volume: String,
+    close_time: u64,
+    quote_asset_volume: String,
+    number_of_trades: u32,
+    taker_buy_base_asset_volume: String,
+    taker_buy_quote_asset_volume: String,
+    ignore: String,
+}
 #[derive(Debug, Clone)]
 pub enum Message {
     AddCandlestick((u64, BinanceTrade)),
@@ -244,17 +283,31 @@ struct UpbitTrade {
     trade_price: f64,
     trade_volume: f64,
 }
+#[derive(Debug, Deserialize,Clone)]
+pub struct BinanceTrade {
+    pub e: String, // Event type
+    pub E: i64,    // Event time
+    pub s: String, // Symbol
+    pub t: i64,    // Trade ID
+    pub p: String, // Price
+    pub q: String, // Quantity
+    pub T: i64,    // Trade time
+    pub m: bool,   // Is the buyer the market maker?
+    pub M: bool,   // Ignore
+}
 #[derive(Debug, Deserialize, Clone)]
-struct BinanceTrade {
-    e: String, // Event type
-    s: String, // Symbol
-    t: u64,    // Trade time
-    p: String, // Price
-    q: String, // Quantity
-    b: u64,    // Buyer order id
-    a: u64,    // Seller order id
-    T: u64,    // Trade time
-    m: bool,   // Is the buyer the market maker?
+struct UpbitTradeWS {
+    #[serde(rename = "type")]
+    trade_type: String,
+    code: String,
+    timestamp: u64,
+    trade_timestamp: u64,
+    trade_price: f64,
+    trade_volume: f64,
+    ask_bid: String,
+    prev_closing_price: f64,
+    change: String,
+    change_price: f64,
 }
 
 fn calculate_moving_average(
@@ -290,28 +343,31 @@ fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BT
         return rsi_values;
     }
 
-    let mut price_changes: Vec<(u64, f32)> = Vec::new();
+    let mut gains = Vec::new();
+    let mut losses = Vec::new();
     let mut prev_close = None;
+    let mut timestamps = Vec::new();
 
     // 가격 변화 계산
     for (timestamp, candle) in candlesticks.iter() {
         if let Some(prev) = prev_close {
             let change = candle.close - prev;
-            price_changes.push((*timestamp, change));
+            timestamps.push(*timestamp);
+            if change >= 0.0 {
+                gains.push(change);
+                losses.push(0.0);
+            } else {
+                gains.push(0.0);
+                losses.push(-change);
+            }
         }
         prev_close = Some(candle.close);
     }
 
     // RSI 계산
-    for i in period..price_changes.len() {
-        let window = &price_changes[i - period + 1..=i];
-        let (gains, losses): (Vec<f32>, Vec<f32>) = window
-            .iter()
-            .map(|(_, change)| *change)
-            .partition(|&change| change >= 0.0);
-
-        let avg_gain: f32 = gains.iter().sum::<f32>() / period as f32;
-        let avg_loss: f32 = losses.iter().map(|&x| x.abs()).sum::<f32>() / period as f32;
+    for i in period..timestamps.len() {
+        let avg_gain: f32 = gains[i - period..i].iter().sum::<f32>() / period as f32;
+        let avg_loss: f32 = losses[i - period..i].iter().sum::<f32>() / period as f32;
 
         let rs = if avg_loss == 0.0 {
             100.0
@@ -320,144 +376,87 @@ fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BT
         };
 
         let rsi = 100.0 - (100.0 / (1.0 + rs));
-        rsi_values.insert(price_changes[i].0, rsi);
+        rsi_values.insert(timestamps[i], rsi);
     }
 
     rsi_values
 }
 fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
-        let url = Url::parse("wss://api.upbit.com/websocket/v1").unwrap();
+        let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@trade").unwrap();
+        println!("Connecting to Binance WebSocket...");
         let (tx, mut rx) = mpsc::channel(100);
 
         yield Message::WebSocketInit(tx.clone());
 
         loop {
-            if let Ok((mut ws_stream, _)) = connect_async(url.clone()).await {
-                let initial_subscribe = json!([
-                    {"ticket":"test"},
-                    {
-                        "type":"trade",    // 실시간 체결 데이터 구독
-                        "codes":["KRW-BTC"],
-                        "isOnlyRealtime": true
-                    }
-                ]).to_string();
+            match connect_async(url.clone()).await {
+                Ok((mut ws_stream, _)) => {
+                    println!("Connected to Binance WebSocket");
 
-                if let Err(_) = ws_stream.send(ME::Text(initial_subscribe)).await {
-                    continue;
-                }
-
-                loop {
-                    tokio::select! {
-                        Some(new_coin) = rx.next() => {
-                            let subscribe_message = json!([
-                                {"ticket":"test"},
-                                {
-                                    "type":"trade",
-                                    "codes":[format!("KRW-{}", new_coin)],
-                                    "isOnlyRealtime": true
-                                }
-                            ]).to_string();
-
-                            if let Err(_) = ws_stream.send(ME::Text(subscribe_message)).await {
+                    loop {
+                        tokio::select! {
+                            Some(new_coin) = rx.next() => {
+                                println!("Received new coin: {}", new_coin);
+                                let new_url = format!("wss://stream.binance.com:9443/ws/{}usdt@trade",
+                                    new_coin.to_lowercase());
+                                println!("Switching to {}", new_url);
                                 break;
                             }
-                            println!("Subscribed to {}", new_coin);
-                        }
-                        Some(Ok(message)) = ws_stream.next() => {
-                            match message {
-                                ME::Binary(binary_content) => {
-                                    if let Ok(trade) = serde_json::from_slice::<BinanceTrade>(&binary_content) {
-
-                                        // 가격 업데이트와 캔들스틱 업데이트를 동시에 전송
-                                        let symbol = trade.s.replace("USDT", "");
-                                        yield Message::UpdatePrice(
-                                            symbol.clone(),
-                                            trade.p.parse::<f64>().unwrap(),
-                                            0.0,  // 변동률은 별도 계산 필요
-                                        );
-                                        yield Message::AddCandlestick((trade.t, trade));
+                            Some(msg) = ws_stream.next() => {
+                                match msg {
+                                    Ok(message) => {
+                                        match message {
+                                            ME::Text(text) => {
+                                                println!("Received raw message: {}", text);
+                                                match serde_json::from_str::<BinanceTrade>(&text) {
+                                                    Ok(trade) => {
+                                                        println!("Parsed trade: {:?}", trade);
+                                                        let symbol = trade.s.replace("USDT", "");
+                                                        let price = match trade.p.parse::<f64>() {
+                                                            Ok(p) => p,
+                                                            Err(e) => {
+                                                                println!("Price parse error: {}", e);
+                                                                continue;
+                                                            }
+                                                        };
+                                                        yield Message::UpdatePrice(
+                                                            symbol.clone(),
+                                                            price,
+                                                            0.0
+                                                        );
+                                                        yield Message::AddCandlestick((trade.T as u64, trade));
+                                                    }
+                                                    Err(e) => println!("JSON parse error: {}", e)
+                                                }
+                                            }
+                                            _ => println!("Received non-text message: {:?}", message)
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("WebSocket error: {}", e);
+                                        break;
                                     }
                                 }
-                                _ => continue,
+                            }
+                            else => {
+                                println!("WebSocket connection closed");
+                                break;
                             }
                         }
-                        else => break,
                     }
                 }
+                Err(e) => {
+                    println!("Connection error: {}", e);
+                    yield Message::Error;
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
             }
-            yield Message::Error;
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            println!("WebSocket disconnected, reconnecting...");
         }
     }
 }
 
-// fn upbit_connection() -> impl Stream<Item = Message> {
-//     stream! {
-//         let url = Url::parse("wss://api.upbit.com/websocket/v1").unwrap();
-//         let (tx, mut rx) = mpsc::channel(100);
-
-//         yield Message::WebSocketInit(tx.clone());
-
-//         loop {
-//             if let Ok((mut ws_stream, _)) = connect_async(url.clone()).await {
-//                 let initial_subscribe = json!([
-//                     {"ticket":"test"},
-//                     {
-//                         "type":"trade",    // 실시간 체결 데이터 구독
-//                         "codes":["KRW-BTC"],
-//                         "isOnlyRealtime": true
-//                     }
-//                 ]).to_string();
-
-//                 if let Err(_) = ws_stream.send(ME::Text(initial_subscribe)).await {
-//                     continue;
-//                 }
-
-//                 loop {
-//                     tokio::select! {
-//                         Some(new_coin) = rx.next() => {
-//                             let subscribe_message = json!([
-//                                 {"ticket":"test"},
-//                                 {
-//                                     "type":"trade",
-//                                     "codes":[format!("KRW-{}", new_coin)],
-//                                     "isOnlyRealtime": true
-//                                 }
-//                             ]).to_string();
-
-//                             if let Err(_) = ws_stream.send(ME::Text(subscribe_message)).await {
-//                                 break;
-//                             }
-//                             println!("Subscribed to {}", new_coin);
-//                         }
-//                         Some(Ok(message)) = ws_stream.next() => {
-//                             match message {
-//                                 ME::Binary(binary_content) => {
-//                                     if let Ok(trade) = serde_json::from_slice::<UpbitTrade>(&binary_content) {
-
-//                                         // 가격 업데이트와 캔들스틱 업데이트를 동시에 전송
-//                                         let symbol = trade.code.replace("KRW-", "");
-//                                         yield Message::UpdatePrice(
-//                                             symbol.clone(),
-//                                             trade.trade_price,
-//                                             0.0,  // 변동률은 별도 계산 필요
-//                                         );
-//                                         yield Message::AddCandlestick((trade.timestamp, trade));
-//                                     }
-//                                 }
-//                                 _ => continue,
-//                             }
-//                         }
-//                         else => break,
-//                     }
-//                 }
-//             }
-//             yield Message::Error;
-//             tokio::time::sleep(Duration::from_secs(1)).await;
-//         }
-//     }
-// }
 impl RTarde {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
@@ -1059,11 +1058,10 @@ impl<Message> Program<Message> for Chart {
         let bottom_margin = 40.0;
 
         // 가격 차트 높이 계산
-        let price_chart_height = bounds.height * 0.5;  // 가격 차트 높이 증가 (75%)
+        let price_chart_height = bounds.height * 0.5; // 가격 차트 높이 증가 (75%)
         let remaining_height = bounds.height - price_chart_height - margin - bottom_margin;
         let volume_area_height = remaining_height * 0.5;
         let rsi_area_height = remaining_height * 0.4;
-        
 
         // 차트 영역 계산
         let price_area_end = margin + price_chart_height;
@@ -1118,13 +1116,16 @@ impl<Message> Program<Message> for Chart {
 
         // 캔들스틱 크기 계산
         let available_width = bounds.width - left_margin - right_margin;
-        let candles_per_screen = 1000; // 한 화면에 보여줄 캔들 수
+        let candles_per_screen = 1000;
 
         let base_candle_width = match self.candle_type {
-            CandleType::Minute1 => 6.0,  // 1분봉 크기 증가
-            CandleType::Minute3 => 6.0,  // 3분봉 크기 증가
-            CandleType::Day => 6.,
+            CandleType::Minute1 => 10.0, // 1분봉 크기 증가
+            CandleType::Minute3 => 10.0, // 3분봉 크기 증가
+            CandleType::Day => 10.0,     // 일봉 크기 증가
         };
+        let target_position = available_width * 0.95;
+        let total_chart_width = candles_per_screen as f32 * base_candle_width;
+        let initial_offset = target_position - total_chart_width;
 
         // 보이는 캔들 수 계산
         let visible_candles = candles_per_screen;
@@ -1171,7 +1172,8 @@ impl<Message> Program<Message> for Chart {
             .collect();
         // 캔들스틱과 거래량 바 그리기
         for (i, (timestamp, candlestick)) in visible_candlesticks.iter().enumerate() {
-            let x = left_margin + (i as f32 * base_candle_width) + state.offset;
+            // let x = left_margin + (i as f32 * base_candle_width) + state.offset;
+            let x = left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
 
             let color = if candlestick.close >= candlestick.open {
                 Color::from_rgb(0.8, 0.0, 0.0)
@@ -1237,7 +1239,7 @@ impl<Message> Program<Message> for Chart {
 
                 frame.fill_text(canvas::Text {
                     content: time_str,
-                    position: Point::new(x - 15.0, bounds.height - bottom_margin + 15.0),  // 위치 조정
+                    position: Point::new(x - 15.0, bounds.height - bottom_margin + 15.0), // 위치 조정
                     color: Color::from_rgb(0.7, 0.7, 0.7),
                     size: Pixels(10.0),
                     ..canvas::Text::default()
@@ -1247,42 +1249,16 @@ impl<Message> Program<Message> for Chart {
 
         // RSI 그리기
         if self.show_rsi {
-            // RSI 기준선 그리기
-            let rsi_levels = [
-                (70.0, "overbought"),
-                (50.0, "neutrality"),
-                (30.0, "oversold"),
-            ];
-            for (level, label) in rsi_levels.iter() {
-                let y = rsi_area_start + (rsi_height * (1.0 - (level / 100.0)));
-
-                frame.stroke(
-                    &canvas::Path::new(|p| {
-                        p.move_to(Point::new(left_margin, y));
-                        p.line_to(Point::new(bounds.width - right_margin, y));
-                    }),
-                    canvas::Stroke::default()
-                        .with_color(Color::from_rgb(0.2, 0.2, 0.25))
-                        .with_width(1.0),
-                );
-
-                frame.fill_text(canvas::Text {
-                    content: format!("RSI {} ({})", level, label),
-                    position: Point::new(5.0, y - 5.0),
-                    color: Color::from_rgb(0.7, 0.7, 0.7),
-                    size: Pixels(10.0),
-                    ..canvas::Text::default()
-                });
-            }
-
-            // RSI 선 그리기
             let mut rsi_path_builder = canvas::path::Builder::new();
             let mut first_rsi = true;
 
             for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
                 if let Some(&rsi) = self.rsi_values.get(timestamp) {
-                    let x = left_margin + (i as f32 * base_candle_width) + state.offset;
-                    let rsi_y = rsi_area_start + (rsi_height * (1.0 - (rsi / 100.0)));
+                    let x = left_margin
+                        + (i as f32 * base_candle_width)
+                        + initial_offset
+                        + state.offset;
+                    let rsi_y = rsi_area_start + (rsi_area_height * (1.0 - (rsi / 100.0)));
 
                     if first_rsi {
                         rsi_path_builder.move_to(Point::new(x + body_width / 2.0, rsi_y));
@@ -1364,45 +1340,7 @@ fn main() -> iced::Result {
         // .font(font_bytes)
         .run()
 }
-#[derive(Debug, Deserialize, Clone)]
-struct UpbitCandle {
-    candle_acc_trade_volume: f32,
 
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    high_price: f32,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    low_price: f32,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    opening_price: f32,
-
-    timestamp: u64,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    trade_price: f32,
-}
-#[derive(Debug, Deserialize, Clone)]
-struct UpbitMinuteCandle {
-    opening_price: f64,
-    high_price: f64,
-    low_price: f64,
-    trade_price: f64,
-    timestamp: u64,
-    candle_acc_trade_volume: f64,
-}
-#[derive(Debug, Deserialize, Clone)]
-struct BinanceCandle {
-    open_time: u64,
-    open: String,
-    high: String,
-    low: String,
-    close: String,
-    volume: String,
-    close_time: u64,
-    quote_asset_volume: String,
-    number_of_trades: u32,
-    taker_buy_base_asset_volume: String,
-    taker_buy_quote_asset_volume: String,
-    ignore: String,
-}
 fn deserialize_f32_or_null<'de, D>(deserializer: D) -> Result<f32, D::Error>
 where
     D: serde::Deserializer<'de>,
