@@ -885,78 +885,52 @@ impl RTarde {
             }
             Message::AddCandlestick(trade) => {
                 let (timestamp, trade_data) = trade;
-                let current_market = format!("KRW-{}", self.selected_coin);
-
+                let current_market = format!("{}USDT", self.selected_coin);
+            
                 if trade_data.s != current_market {
                     return;
                 }
-
+            
+                if self.candlesticks.is_empty() {
+                    // 초기 데이터 로드
+                    if let Ok(candles) = fetch_candles(
+                        &format!("KRW-{}", self.selected_coin),
+                        &self.selected_candle_type,
+                        None
+                    ) {
+                        self.candlesticks = candles;
+                    }
+                }
+            
                 let current_timestamp = timestamp;
                 let candle_timestamp = match self.selected_candle_type {
-                    CandleType::Minute1 => current_timestamp - (current_timestamp % (60 * 1000)),
-                    CandleType::Minute3 => {
-                        current_timestamp - (current_timestamp % (3 * 60 * 1000))
-                    }
-                    CandleType::Day => {
-                        current_timestamp - (current_timestamp % (24 * 60 * 60 * 1000))
-                    }
+                    CandleType::Minute1 => current_timestamp - (current_timestamp % 60000),
+                    CandleType::Minute3 => current_timestamp - (current_timestamp % 180000),
+                    CandleType::Day => current_timestamp - (current_timestamp % 86400000),
                 };
-
-                let trade_price = trade_data.p.parse::<f32>().unwrap();
-
-                // 최신 캔들스틱과 비교
-                let latest_timestamp = self.candlesticks.keys().next_back().cloned();
-
-                if let Some(latest_ts) = latest_timestamp {
-                    if candle_timestamp > latest_ts {
-                        // 새로운 캔들스틱 시작
-                        let new_candlestick = Candlestick {
-                            open: trade_price,
-                            high: trade_price,
-                            low: trade_price,
-                            close: trade_price,
-                            volume: trade_data.q.parse::<f32>().unwrap(),
-                        };
-                        self.candlesticks.insert(candle_timestamp, new_candlestick);
-                        println!(
-                            "New candlestick at: {} price: {}, volume: {}",
-                            candle_timestamp,
-                            trade_price,
-                            trade_data.q.parse::<f32>().unwrap(),
-                        );
-
-                        // 오래된 캔들 제거
-                        while self.candlesticks.len() > 100 {
-                            if let Some(first_key) = self.candlesticks.keys().next().cloned() {
-                                self.candlesticks.remove(&first_key);
-                            }
-                        }
-                    } else if candle_timestamp == latest_ts {
-                        // 현재 캔들스틱 업데이트
-                        if let Some(current_candle) = self.candlesticks.get_mut(&candle_timestamp) {
-                            current_candle.high = current_candle.high.max(trade_price);
-                            current_candle.low = current_candle.low.min(trade_price);
-                            current_candle.close = trade_price;
-                            current_candle.volume += trade_data.q.parse::<f32>().unwrap()
-                            // 거래량 누적
-                            // println!(
-                            //     "Updated candlestick: close {}, volume {}",
-                            //     trade_price, current_candle.volume
-                            // );
-                        }
-                    }
-                } else {
-                    // 첫 캔들스틱 생성
-                    let new_candlestick = Candlestick {
+            
+                let trade_price = trade_data.p.parse::<f32>().unwrap_or_default();
+                let trade_volume = trade_data.q.parse::<f32>().unwrap_or_default();
+            
+                self.candlesticks
+                    .entry(candle_timestamp)
+                    .and_modify(|candle| {
+                        candle.high = candle.high.max(trade_price);
+                        candle.low = candle.low.min(trade_price);
+                        candle.close = trade_price;
+                        candle.volume += trade_volume;
+                    })
+                    .or_insert(Candlestick {
                         open: trade_price,
                         high: trade_price,
                         low: trade_price,
                         close: trade_price,
-                        volume: trade_data.q.parse::<f32>().unwrap(),
-                    };
-                    self.candlesticks.insert(candle_timestamp, new_candlestick);
-                }
-
+                        volume: trade_volume,
+                    });
+            
+                println!("Updated candlestick at {}: price={}, volume={}", 
+                         candle_timestamp, trade_price, trade_volume);
+            
                 self.auto_scroll = true;
             }
             Message::RemoveCandlestick => {
