@@ -250,7 +250,7 @@ impl Default for RTarde {
             coin_list.insert(
                 symbol.to_string(),
                 CoinInfo {
-                    symbol: format!("KRW-{}", symbol),
+                    symbol: format!("USDT-{}", symbol),
                     name: symbol.to_string(),
                     price: 0.0,
                     change_percent: 0.0,
@@ -258,7 +258,7 @@ impl Default for RTarde {
             );
         }
         Self {
-            candlesticks: fetch_candles("KRW-BTC", &CandleType::Day, None).unwrap_or_default(),
+            candlesticks: fetch_candles("USDT-BTC", &CandleType::Day, None).unwrap_or_default(),
             timer_enabled: true,
             selected_coin: "BTC".to_string(),
             selected_candle_type: CandleType::Day,
@@ -561,7 +561,7 @@ impl RTarde {
                             .spacing(5)
                             .push(
                                 // 현재가
-                                Text::new(format!("{:.0} KRW", info.price))
+                                Text::new(format!("{:.0} USDT", info.price))
                                     .size(32)
                                     .font(custom_font)
                                     .color(change_color),
@@ -594,7 +594,7 @@ impl RTarde {
                                             .color(Color::from_rgb(0.5, 0.5, 0.5)),
                                     )
                                     .push(
-                                        Text::new(format!("{:.0} KRW", info.price * 1.1)) // 예시 데이터
+                                        Text::new(format!("{:.0} USDT", info.price * 1.1)) // 예시 데이터
                                             .size(14),
                                     ),
                             )
@@ -607,7 +607,7 @@ impl RTarde {
                                             .color(Color::from_rgb(0.5, 0.5, 0.5)),
                                     )
                                     .push(
-                                        Text::new(format!("{:.0} KRW", info.price * 0.9)) // 예시 데이터
+                                        Text::new(format!("{:.0} USDT", info.price * 0.9)) // 예시 데이터
                                             .size(14),
                                     ),
                             ),
@@ -670,7 +670,7 @@ impl RTarde {
                         Row::new()
                             .spacing(10)
                             .push(text_input("Enter price...", ""))
-                            .push(Text::new("KRW")),
+                            .push(Text::new("USDU")),
                     )
                     .push(
                         Row::new()
@@ -715,7 +715,7 @@ impl RTarde {
                         .push(
                             Row::new()
                                 .spacing(10)
-                                .push(Text::new("KRW"))
+                                .push(Text::new("USDT"))
                                 .push(Text::new("1,000,000").size(16)),
                         )
                         .push(
@@ -763,7 +763,7 @@ impl RTarde {
                         let date_str = datetime.format("%Y-%m-%dT%H:%M:%S").to_string();
 
                         // 클론해서 async 클로저에 전달
-                        let market = format!("KRW-{}", self.selected_coin);
+                        let market = format!("USDT-{}", self.selected_coin);
                         let candle_type = self.selected_candle_type.clone();
 
                         let runtime = tokio::runtime::Handle::current();
@@ -790,7 +790,7 @@ impl RTarde {
                 self.selected_candle_type = candle_type.clone();
 
                 // 캔들스틱 데이터 새로 불러오기
-                let market = format!("KRW-{}", self.selected_coin);
+                let market = format!("USDT-{}", self.selected_coin);
                 println!(
                     "Fetching new candles for market {} with type {}",
                     market, candle_type
@@ -841,7 +841,7 @@ impl RTarde {
                 self.selected_coin = symbol.clone();
                 self.candlesticks.clear();
 
-                match fetch_candles(&format!("KRW-{}", symbol), &self.selected_candle_type, None) {
+                match fetch_candles(&format!("USDT-{}", symbol), &self.selected_candle_type, None) {
                     Ok(candles) => {
                         if candles.is_empty() {
                             println!("Warning: No candles received for {}", symbol);
@@ -894,7 +894,7 @@ impl RTarde {
                 if self.candlesticks.is_empty() {
                     // 초기 데이터 로드
                     if let Ok(candles) = fetch_candles(
-                        &format!("KRW-{}", self.selected_coin),
+                        &format!("USDT-{}", self.selected_coin),
                         &self.selected_candle_type,
                         None
                     ) {
