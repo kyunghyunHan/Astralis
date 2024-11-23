@@ -101,6 +101,8 @@ pub enum Message {
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
     New,
+    ToggleKNN,                           // KNN 시스템 켜기/끄기
+    UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
 }
 
 struct RTarde {
@@ -117,6 +119,110 @@ struct RTarde {
     show_ma200: bool,
     loading_more: bool,          // 추가: 데이터 로딩 중인지 여부
     oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
+    knn_enabled: bool,
+    knn_prediction: Option<String>,        // "UP" 또는 "DOWN"
+    knn_buy_signals: BTreeMap<u64, bool>,  // 매수 신호 저장
+    knn_sell_signals: BTreeMap<u64, bool>, // 매도 신호 저장
+}
+#[derive(Debug, Clone)]
+struct KNNPredictor {
+    k: usize,
+    window_size: usize,
+    features: Vec<Vec<f32>>,
+    labels: Vec<bool>, // true = 상승, false = 하락
+}
+
+impl KNNPredictor {
+    fn new(k: usize, window_size: usize) -> Self {
+        Self {
+            k,
+            window_size,
+            features: Vec::new(),
+            labels: Vec::new(),
+        }
+    }
+
+    // 특성 추출
+    fn extract_features(&self, candlesticks: &BTreeMap<u64, Candlestick>) -> Option<Vec<f32>> {
+        if candlesticks.len() < self.window_size {
+            return None;
+        }
+
+        let mut features = Vec::new();
+        let sorted_candles: Vec<_> = candlesticks.iter().collect();
+
+        // 최근 window_size 개의 캔들만 사용
+        let recent_candles = &sorted_candles[sorted_candles.len() - self.window_size..];
+
+        // 가격 변동률
+        let price_changes: Vec<f32> = recent_candles
+            .windows(2)
+            .map(|w| {
+                let (_, prev) = w[0];
+                let (_, curr) = w[1];
+                ((curr.close - prev.close) / prev.close) * 100.0
+            })
+            .collect();
+
+        // RSI 계산을 위한 데이터 준비
+        let mut gains = 0.0;
+        let mut losses = 0.0;
+        for change in price_changes.iter() {
+            if *change > 0.0 {
+                gains += change;
+            } else {
+                losses -= change;
+            }
+        }
+
+        // 특성들 추가
+        features.extend_from_slice(&price_changes);
+        features.push(gains / (self.window_size as f32));
+        features.push(losses / (self.window_size as f32));
+
+        Some(features)
+    }
+
+    // 거리 계산
+    fn euclidean_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+
+    // 예측
+    fn predict(&self, features: &[f32]) -> Option<bool> {
+        if self.features.is_empty() {
+            return None;
+        }
+
+        // 모든 훈련 데이터와의 거리 계산
+        let mut distances: Vec<(f32, bool)> = self
+            .features
+            .iter()
+            .zip(&self.labels)
+            .map(|(train_features, &label)| {
+                (self.euclidean_distance(features, train_features), label)
+            })
+            .collect();
+
+        // 거리순으로 정렬
+        distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        // k개의 가장 가까운 이웃들의 투표
+        let k_nearest = &distances[..self.k];
+        let up_votes = k_nearest.iter().filter(|&&(_, label)| label).count();
+
+        Some(up_votes > self.k / 2)
+    }
+
+    // 학습 데이터 추가
+    fn add_training_data(&mut self, features: Vec<f32>, label: bool) {
+        self.features.push(features);
+        self.labels.push(label);
+    }
 }
 // Candlestick 구조체 업데이트
 #[derive(Debug, Clone)]
@@ -180,6 +286,10 @@ struct Chart {
     ma200_values: BTreeMap<u64, f32>,
     rsi_values: BTreeMap<u64, f32>,
     show_rsi: bool,
+    knn_enabled: bool,
+    knn_prediction: Option<String>,
+    buy_signals: BTreeMap<u64, bool>,
+    sell_signals: BTreeMap<u64, bool>,
 }
 
 impl Chart {
@@ -190,12 +300,14 @@ impl Chart {
         show_ma10: bool,
         show_ma20: bool,
         show_ma200: bool,
+        knn_enabled: bool,
+        knn_prediction: Option<String>,
     ) -> Self {
         let ma5_values = calculate_moving_average(&candlesticks, 5);
         let ma10_values = calculate_moving_average(&candlesticks, 10);
         let ma20_values = calculate_moving_average(&candlesticks, 20);
         let ma200_values = calculate_moving_average(&candlesticks, 200);
-        let rsi_values = calculate_rsi(&candlesticks, 14); // 14기간 RSI 계산
+        let rsi_values = calculate_rsi(&candlesticks, 14);
 
         let price_range = if candlesticks.is_empty() {
             Some((0.0, 100.0))
@@ -204,7 +316,6 @@ impl Chart {
                 (acc.0.min(c.low), acc.1.max(c.high))
             });
 
-            // 이동평균선 값들도 고려하여 가격 범위 계산
             let ma_min = [&ma5_values, &ma10_values, &ma20_values, &ma200_values]
                 .iter()
                 .filter(|ma| !ma.is_empty())
@@ -220,7 +331,11 @@ impl Chart {
             let margin = (ma_max - ma_min) * 0.1;
             Some((ma_min - margin, ma_max + margin))
         };
-
+        let (buy_signals, sell_signals) = if knn_enabled {
+            calculate_knn_signals(&candlesticks)
+        } else {
+            (BTreeMap::new(), BTreeMap::new())
+        };
         Self {
             candlesticks,
             state: ChartState {
@@ -239,6 +354,10 @@ impl Chart {
             ma200_values,
             rsi_values,
             show_rsi: true,
+            knn_enabled,
+            knn_prediction,
+            buy_signals,
+            sell_signals,
         }
     }
 }
@@ -271,8 +390,109 @@ impl Default for RTarde {
             show_ma200: false,
             loading_more: false,
             oldest_date: None,
+            knn_enabled: false,
+            knn_prediction: None,
+            knn_buy_signals: BTreeMap::new(),
+            knn_sell_signals: BTreeMap::new(),
         }
     }
+}
+fn calculate_knn_signals(
+    candlesticks: &BTreeMap<u64, Candlestick>,
+) -> (BTreeMap<u64, bool>, BTreeMap<u64, bool>) {
+    let mut buy_signals = BTreeMap::new();
+    let mut sell_signals = BTreeMap::new();
+
+    // 최소 필요 데이터 포인트 수
+    let k = 5; // k-최근접 이웃 수
+    let window_size = 20;
+
+    // 데이터를 벡터로 변환하여 시간순 정렬
+    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
+
+    if data.len() < window_size + k {
+        return (buy_signals, sell_signals);
+    }
+
+    // 모든 시점에 대해 분석
+    for i in window_size..data.len() {
+        let current_window = &data[i - window_size..i];
+        let (timestamp, current_candle) = data[i];
+
+        // 특성 추출
+
+        // 1. 가격 변동률
+        let price_changes: Vec<f32> = current_window
+            .windows(2)
+            .map(|w| {
+                let (_, prev) = w[0];
+                let (_, curr) = w[1];
+                ((curr.close - prev.close) / prev.close) * 100.0
+            })
+            .collect();
+
+        // 2. 이동평균선 계산
+        let ma5: f32 = current_window
+            .iter()
+            .rev()
+            .take(5)
+            .map(|(_, c)| c.close)
+            .sum::<f32>()
+            / 5.0;
+        let ma20: f32 = current_window.iter().map(|(_, c)| c.close).sum::<f32>() / 20.0 as f32;
+
+        // 3. RSI 계산
+        let (gains, losses): (Vec<f32>, Vec<f32>) = price_changes
+            .iter()
+            .map(|&change| {
+                if change > 0.0 {
+                    (change, 0.0)
+                } else {
+                    (0.0, -change)
+                }
+            })
+            .unzip();
+
+        let avg_gain = gains.iter().sum::<f32>() / 14.0;
+        let avg_loss = losses.iter().sum::<f32>() / 14.0;
+        let rsi = if avg_loss == 0.0 {
+            100.0
+        } else {
+            100.0 - (100.0 / (1.0 + (avg_gain / avg_loss)))
+        };
+
+        // 4. 볼륨 변화
+        let vol_ma5: f32 = current_window
+            .iter()
+            .rev()
+            .take(5)
+            .map(|(_, c)| c.volume)
+            .sum::<f32>()
+            / 5.0;
+        let current_vol = current_candle.volume;
+        let vol_ratio = current_vol / vol_ma5;
+
+        // 매수 신호 조건
+        let buy_condition = rsi < 30.0 && // 과매도
+            ma5 > ma20 && // 골든 크로스
+            vol_ratio > 1.5 && // 거래량 증가
+            price_changes.last().unwrap_or(&0.0) > &0.0; // 현재 상승중
+
+        // 매도 신호 조건
+        let sell_condition = rsi > 70.0 && // 과매수
+            ma5 < ma20 && // 데드 크로스
+            vol_ratio > 1.5 && // 거래량 증가
+            price_changes.last().unwrap_or(&0.0) < &0.0; // 현재 하락중
+
+        if buy_condition {
+            buy_signals.insert(*timestamp, true);
+        }
+        if sell_condition {
+            sell_signals.insert(*timestamp, true);
+        }
+    }
+
+    (buy_signals, sell_signals)
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -283,7 +503,7 @@ struct UpbitTrade {
     trade_price: f64,
     trade_volume: f64,
 }
-#[derive(Debug, Deserialize,Clone)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct BinanceTrade {
     pub e: String, // Event type
     pub E: i64,    // Event time
@@ -319,20 +539,18 @@ fn calculate_moving_average(
         return result;
     }
 
-    // 모든 캔들스틱의 timestamp와 종가를 벡터로 변환
-    let data: Vec<(u64, f32)> = candlesticks
-        .iter()
-        .map(|(&timestamp, candle)| (timestamp, candle.close))
-        .collect();
+    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
 
-    // 이동 윈도우로 평균 계산
-    for i in (period - 1)..data.len() {
-        let sum: f32 = data[i + 1 - period..=i]
-            .iter()
-            .map(|(_, price)| price)
-            .sum();
-        let avg = sum / period as f32;
-        result.insert(data[i].0, avg);
+    // 모든 캔들에 대해 이동평균 계산
+    for i in 0..data.len() {
+        if i >= period - 1 {
+            let sum: f32 = data[i + 1 - period..=i]
+                .iter()
+                .map(|(_, candle)| candle.close)
+                .sum();
+            let avg = sum / period as f32;
+            result.insert(*data[i].0, avg);
+        }
     }
 
     result
@@ -485,10 +703,50 @@ impl RTarde {
                         .push(
                             checkbox("MA200", self.show_ma200).on_toggle(|_| Message::ToggleMA200),
                         ),
+                )
+                .push(
+                    // KNN 체크박스 추가
+                    Row::new().spacing(10).push(
+                        checkbox("KNN prediction", self.knn_enabled)
+                            .on_toggle(|_| Message::ToggleKNN),
+                    ),
                 ),
         )
         .padding(10);
-
+        let prediction_display = if self.knn_enabled {
+            if let Some(pred) = &self.knn_prediction {
+                Container::new(
+                    Text::new(format!("KNN prediction: {}", pred))
+                        .size(20)
+                        .color(if pred == "rising" {
+                            iced::Color::from_rgb(0.0, 0.8, 0.0) // 초록색
+                        } else {
+                            iced::Color::from_rgb(0.8, 0.0, 0.0) // 빨간색
+                        }),
+                )
+                .padding(10)
+            } else {
+                Container::new(Text::new("Preparing prediction...").size(20)).padding(10)
+            }
+        } else {
+            Container::new(Space::new(Length::Fill, Length::Shrink))
+        };
+        // let knn_controls = Container::new(
+        //     Column::new()
+        //         .spacing(10)
+        //         .push(
+        //             Row::new().spacing(10).push(
+        //                 checkbox("KNN 시스템 활성화", self.knn_enabled)
+        //                     .on_toggle(|_| Message::ToggleKNN),
+        //             ),
+        //         )
+        //         .push(if let Some(prediction) = &self.knn_prediction {
+        //             Text::new(format!("KNN 예측: {}", prediction)).size(16)
+        //         } else {
+        //             Text::new("예측 대기중...").size(16)
+        //         }),
+        // )
+        // .padding(10);
         let coins: Vec<String> = self.coin_list.keys().cloned().collect();
 
         let coin_picker = pick_list(coins, Some(self.selected_coin.clone()), Message::SelectCoin)
@@ -623,10 +881,12 @@ impl RTarde {
         let canvas = Canvas::new(Chart::new(
             self.candlesticks.clone(),
             self.selected_candle_type.clone(),
-            self.show_ma5,   // 5일 이동평균선 표시 여부
-            self.show_ma10,  // 10일 이동평균선 표시 여부
-            self.show_ma20,  // 20일 이동평균선 표시 여부
-            self.show_ma200, // 200일 이동평균선 표시 여부
+            self.show_ma5,
+            self.show_ma10,
+            self.show_ma20,
+            self.show_ma200,
+            self.knn_enabled,
+            self.knn_prediction.clone(), // 여기까지가 기존 8개 파라미터
         ))
         .width(iced::Fill)
         .height(Length::from(800));
@@ -734,7 +994,8 @@ impl RTarde {
                 Row::new()
                     .push(coin_picker.width(FillPortion(1)))
                     .push(candle_type_picker.width(FillPortion(1)))
-                    .push(ma_controls.width(FillPortion(10))),
+                    .push(ma_controls.width(FillPortion(10)))
+                    .push(prediction_display.width(FillPortion(2))),
             )
             .push(
                 Row::new()
@@ -747,6 +1008,26 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::ToggleKNN => {
+                self.knn_enabled = !self.knn_enabled;
+                if self.knn_enabled {
+                    // KNN 시스템 켤 때 초기 예측
+                    if let Some(prediction) = self.predict_knn() {
+                        self.knn_prediction = Some(prediction);
+                        let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                        self.knn_buy_signals = buy_signals;
+                        self.knn_sell_signals = sell_signals;
+                    }
+                } else {
+                    self.knn_prediction = None;
+                    self.knn_buy_signals.clear();
+                    self.knn_sell_signals.clear();
+                }
+            }
+
+            Message::UpdateKNNPrediction(prediction) => {
+                self.knn_prediction = prediction;
+            }
             Message::New => {
                 println!("{}", "새로운");
             }
@@ -841,7 +1122,11 @@ impl RTarde {
                 self.selected_coin = symbol.clone();
                 self.candlesticks.clear();
 
-                match fetch_candles(&format!("USDT-{}", symbol), &self.selected_candle_type, None) {
+                match fetch_candles(
+                    &format!("USDT-{}", symbol),
+                    &self.selected_candle_type,
+                    None,
+                ) {
                     Ok(candles) => {
                         if candles.is_empty() {
                             println!("Warning: No candles received for {}", symbol);
@@ -886,32 +1171,46 @@ impl RTarde {
             Message::AddCandlestick(trade) => {
                 let (timestamp, trade_data) = trade;
                 let current_market = format!("{}USDT", self.selected_coin);
-            
+
                 if trade_data.s != current_market {
                     return;
                 }
-            
+                if self.knn_enabled {
+                    // 새로운 데이터가 들어올 때마다 예측 업데이트
+                    if let Some(prediction) = self.predict_knn() {
+                        self.knn_prediction = Some(prediction);
+                        let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                        self.knn_buy_signals = buy_signals;
+                        self.knn_sell_signals = sell_signals;
+                    }
+                }
+                if self.knn_enabled {
+                    // 새로운 데이터 추가 시 신호 재계산
+                    let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                    self.knn_buy_signals = buy_signals;
+                    self.knn_sell_signals = sell_signals;
+                }
                 if self.candlesticks.is_empty() {
                     // 초기 데이터 로드
                     if let Ok(candles) = fetch_candles(
                         &format!("USDT-{}", self.selected_coin),
                         &self.selected_candle_type,
-                        None
+                        None,
                     ) {
                         self.candlesticks = candles;
                     }
                 }
-            
+
                 let current_timestamp = timestamp;
                 let candle_timestamp = match self.selected_candle_type {
                     CandleType::Minute1 => current_timestamp - (current_timestamp % 60000),
                     CandleType::Minute3 => current_timestamp - (current_timestamp % 180000),
                     CandleType::Day => current_timestamp - (current_timestamp % 86400000),
                 };
-            
+
                 let trade_price = trade_data.p.parse::<f32>().unwrap_or_default();
                 let trade_volume = trade_data.q.parse::<f32>().unwrap_or_default();
-            
+
                 self.candlesticks
                     .entry(candle_timestamp)
                     .and_modify(|candle| {
@@ -927,10 +1226,12 @@ impl RTarde {
                         close: trade_price,
                         volume: trade_volume,
                     });
-            
-                println!("Updated candlestick at {}: price={}, volume={}", 
-                         candle_timestamp, trade_price, trade_volume);
-            
+
+                println!(
+                    "Updated candlestick at {}: price={}, volume={}",
+                    candle_timestamp, trade_price, trade_volume
+                );
+
                 self.auto_scroll = true;
             }
             Message::RemoveCandlestick => {
@@ -944,6 +1245,56 @@ impl RTarde {
                 println!("WebSocket connection error");
             }
         }
+    }
+    fn extract_knn_features(&self) -> Option<Vec<f32>> {
+        let predictor = KNNPredictor::new(5, 20);
+        predictor.extract_features(&self.candlesticks)
+    }
+
+    // KNN 예측 헬퍼 메서드
+    fn predict_knn(&self) -> Option<String> {
+        if self.candlesticks.len() < 20 {
+            return None;
+        }
+    
+        let window_size = 20;
+        let data: Vec<(&u64, &Candlestick)> = self.candlesticks.iter().collect();
+        let recent_data = &data[data.len().saturating_sub(window_size)..];
+    
+        // 최근 데이터의 기술적 지표 계산
+        let price_changes: Vec<f32> = recent_data
+            .windows(2)
+            .map(|w| {
+                let (_, prev) = w[0];
+                let (_, curr) = w[1];
+                ((curr.close - prev.close) / prev.close) * 100.0
+            })
+            .collect();
+    
+        let ma5: f32 = recent_data.iter().rev().take(5)
+            .map(|(_, c)| c.close).sum::<f32>() / 5.0;
+        let ma20: f32 = recent_data.iter()
+            .map(|(_, c)| c.close).sum::<f32>() / recent_data.len() as f32;
+    
+        let latest_close = recent_data.last().unwrap().1.close;
+        let latest_volume = recent_data.last().unwrap().1.volume;
+        let avg_volume = recent_data.iter()
+            .map(|(_, c)| c.volume)
+            .sum::<f32>() / recent_data.len() as f32;
+    
+        // 예측 로직
+        let bullish_signals = [
+            latest_close > ma5,              // 현재가가 5일 이평선 위
+            ma5 > ma20,                      // 골든크로스 패턴
+            latest_volume > avg_volume * 1.5, // 거래량 증가
+            price_changes.last().unwrap_or(&0.0) > &0.0 // 최근 상승
+        ].iter().filter(|&&x| x).count();
+    
+        Some(if bullish_signals >= 3 {
+            "▲".to_string()
+        } else {
+            "▼".to_string()
+        })
     }
 }
 
@@ -1283,14 +1634,18 @@ impl<Message> Program<Message> for Chart {
 
                 for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
                     if let Some(&ma_price) = values.get(timestamp) {
-                        let x = left_margin + (i as f32 * base_candle_width) + state.offset;
+                        // x 좌표 계산 수정
+                        let x = left_margin
+                            + (i as f32 * base_candle_width)
+                            + initial_offset
+                            + state.offset;
                         let y = top_margin + ((max_price - ma_price) * y_scale);
 
                         if first {
-                            path_builder.move_to(Point::new(x, y));
+                            path_builder.move_to(Point::new(x + body_width / 2.0, y));
                             first = false;
                         } else {
-                            path_builder.line_to(Point::new(x, y));
+                            path_builder.line_to(Point::new(x + body_width / 2.0, y));
                         }
                     }
                 }
@@ -1300,6 +1655,64 @@ impl<Message> Program<Message> for Chart {
                     &path,
                     canvas::Stroke::default().with_color(*color).with_width(1.5),
                 );
+            }
+        }
+        if self.knn_enabled {
+            for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
+                let x =
+                    left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
+
+                // 매수 신호
+                if self.buy_signals.contains_key(timestamp) {
+                    let signal_y = price_chart_height - 20.0; // 차트 하단에 표시
+
+                    // 삼각형 그리기 (매수 신호)
+                    frame.stroke(
+                        &canvas::Path::new(|p| {
+                            p.move_to(Point::new(x + body_width / 2.0, signal_y + 10.0));
+                            p.line_to(Point::new(x + body_width / 2.0 - 5.0, signal_y));
+                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y));
+                            p.close();
+                        }),
+                        canvas::Stroke::default()
+                            .with_color(Color::from_rgb(0.0, 0.8, 0.0)) // 초록색
+                            .with_width(2.0),
+                    );
+
+                    frame.fill_text(canvas::Text {
+                        content: "BUY".to_string(),
+                        position: Point::new(x + body_width / 2.0 - 10.0, signal_y - 15.0),
+                        color: Color::from_rgb(0.0, 0.8, 0.0),
+                        size: Pixels(12.0),
+                        ..canvas::Text::default()
+                    });
+                }
+
+                // 매도 신호
+                if self.sell_signals.contains_key(timestamp) {
+                    let signal_y = top_margin + 20.0; // 차트 상단에 표시
+
+                    // 역삼각형 그리기 (매도 신호)
+                    frame.stroke(
+                        &canvas::Path::new(|p| {
+                            p.move_to(Point::new(x + body_width / 2.0, signal_y - 10.0));
+                            p.line_to(Point::new(x + body_width / 2.0 - 5.0, signal_y));
+                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y));
+                            p.close();
+                        }),
+                        canvas::Stroke::default()
+                            .with_color(Color::from_rgb(0.8, 0.0, 0.0)) // 빨간색
+                            .with_width(2.0),
+                    );
+
+                    frame.fill_text(canvas::Text {
+                        content: "SELL".to_string(),
+                        position: Point::new(x + body_width / 2.0 - 10.0, signal_y + 5.0),
+                        color: Color::from_rgb(0.8, 0.0, 0.0),
+                        size: Pixels(12.0),
+                        ..canvas::Text::default()
+                    });
+                }
             }
         }
 
