@@ -121,8 +121,8 @@ struct RTarde {
     oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
     knn_enabled: bool,
     knn_prediction: Option<String>,        // "UP" 또는 "DOWN"
-    knn_buy_signals: BTreeMap<u64, bool>,  // 매수 신호 저장
-    knn_sell_signals: BTreeMap<u64, bool>, // 매도 신호 저장
+    knn_buy_signals: BTreeMap<u64, bool>,  // 매수 신호 추가
+    knn_sell_signals: BTreeMap<u64, bool>, // 매도 신호 추가
 }
 #[derive(Debug, Clone)]
 struct KNNPredictor {
@@ -288,8 +288,8 @@ struct Chart {
     show_rsi: bool,
     knn_enabled: bool,
     knn_prediction: Option<String>,
-    buy_signals: BTreeMap<u64, bool>,
-    sell_signals: BTreeMap<u64, bool>,
+    buy_signals: BTreeMap<u64, bool>,  // 매수 신호 추가
+    sell_signals: BTreeMap<u64, bool>, // 매도 신호 추가
 }
 
 impl Chart {
@@ -302,6 +302,8 @@ impl Chart {
         show_ma200: bool,
         knn_enabled: bool,
         knn_prediction: Option<String>,
+        buy_signals: BTreeMap<u64, bool>,  // 매수 신호 추가
+        sell_signals: BTreeMap<u64, bool>, // 매도 신호 추가
     ) -> Self {
         let ma5_values = calculate_moving_average(&candlesticks, 5);
         let ma10_values = calculate_moving_average(&candlesticks, 10);
@@ -331,11 +333,7 @@ impl Chart {
             let margin = (ma_max - ma_min) * 0.1;
             Some((ma_min - margin, ma_max + margin))
         };
-        let (buy_signals, sell_signals) = if knn_enabled {
-            calculate_knn_signals(&candlesticks)
-        } else {
-            (BTreeMap::new(), BTreeMap::new())
-        };
+
         Self {
             candlesticks,
             state: ChartState {
@@ -403,98 +401,71 @@ fn calculate_knn_signals(
     let mut buy_signals = BTreeMap::new();
     let mut sell_signals = BTreeMap::new();
 
-    // 최소 필요 데이터 포인트 수
-    let k = 5; // k-최근접 이웃 수
     let window_size = 20;
-
-    // 데이터를 벡터로 변환하여 시간순 정렬
     let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
 
-    if data.len() < window_size + k {
+    if data.len() < window_size {
         return (buy_signals, sell_signals);
     }
 
-    // 모든 시점에 대해 분석
     for i in window_size..data.len() {
-        let current_window = &data[i - window_size..i];
-        let (timestamp, current_candle) = data[i];
+        let (timestamp, candle) = data[i];
+        let window = &data[i-window_size..i];
+        
+        // 이동평균선 계산
+        let ma5: f32 = window.iter().rev().take(5)
+            .map(|(_, c)| c.close).sum::<f32>() / 5.0;
+        let ma20: f32 = window.iter()
+            .map(|(_, c)| c.close).sum::<f32>() / window_size as f32;
 
-        // 특성 추출
-
-        // 1. 가격 변동률
-        let price_changes: Vec<f32> = current_window
-            .windows(2)
+        // RSI 계산
+        let price_changes: Vec<f32> = window.windows(2)
             .map(|w| {
                 let (_, prev) = w[0];
                 let (_, curr) = w[1];
-                ((curr.close - prev.close) / prev.close) * 100.0
+                curr.close - prev.close
             })
             .collect();
 
-        // 2. 이동평균선 계산
-        let ma5: f32 = current_window
-            .iter()
-            .rev()
-            .take(5)
-            .map(|(_, c)| c.close)
-            .sum::<f32>()
-            / 5.0;
-        let ma20: f32 = current_window.iter().map(|(_, c)| c.close).sum::<f32>() / 20.0 as f32;
-
-        // 3. RSI 계산
-        let (gains, losses): (Vec<f32>, Vec<f32>) = price_changes
-            .iter()
-            .map(|&change| {
-                if change > 0.0 {
-                    (change, 0.0)
-                } else {
-                    (0.0, -change)
-                }
-            })
+        let (gains, losses): (Vec<f32>, Vec<f32>) = price_changes.iter()
+            .map(|&change| if change > 0.0 { (change, 0.0) } else { (0.0, -change) })
             .unzip();
 
-        let avg_gain = gains.iter().sum::<f32>() / 14.0;
-        let avg_loss = losses.iter().sum::<f32>() / 14.0;
-        let rsi = if avg_loss == 0.0 {
-            100.0
+        let avg_gain = gains.iter().sum::<f32>() / gains.len() as f32;
+        let avg_loss = losses.iter().sum::<f32>() / losses.len() as f32;
+        let rs = if avg_loss == 0.0 { 100.0 } else { avg_gain / avg_loss };
+        let rsi = 100.0 - (100.0 / (1.0 + rs));
+
+        // 볼륨 분석
+        let avg_volume = window.iter().map(|(_, c)| c.volume).sum::<f32>() / window_size as f32;
+        
+        // 추세 확인 (최근 3개 캔들)
+        let recent_trend = window.iter().rev().take(3)
+            .map(|(_, c)| c.close)
+            .collect::<Vec<f32>>();
+        let trend_up = if recent_trend.len() >= 3 {
+            recent_trend[0] > recent_trend[2]  // 최근 가격이 3캔들 전보다 높으면 상승 추세
         } else {
-            100.0 - (100.0 / (1.0 + (avg_gain / avg_loss)))
+            false
         };
 
-        // 4. 볼륨 변화
-        let vol_ma5: f32 = current_window
-            .iter()
-            .rev()
-            .take(5)
-            .map(|(_, c)| c.volume)
-            .sum::<f32>()
-            / 5.0;
-        let current_vol = current_candle.volume;
-        let vol_ratio = current_vol / vol_ma5;
-
-        // 매수 신호 조건
-        let buy_condition = rsi < 30.0 && // 과매도
-            ma5 > ma20 && // 골든 크로스
-            vol_ratio > 1.5 && // 거래량 증가
-            price_changes.last().unwrap_or(&0.0) > &0.0; // 현재 상승중
-
-        // 매도 신호 조건
-        let sell_condition = rsi > 70.0 && // 과매수
-            ma5 < ma20 && // 데드 크로스
-            vol_ratio > 1.5 && // 거래량 증가
-            price_changes.last().unwrap_or(&0.0) < &0.0; // 현재 하락중
-
-        if buy_condition {
+        // 매수 신호 - 다음 조건 중 하나만 만족하면 됨
+        if (rsi < 35.0 && ma5 > ma20 && trend_up) || // RSI 과매도 + 골든크로스 + 상승추세
+           (ma5 > ma20 && candle.volume > avg_volume * 1.5) // 골든크로스 + 적당한 거래량
+        {
             buy_signals.insert(*timestamp, true);
         }
-        if sell_condition {
+        
+        // 매도 신호 - 다음 조건 중 하나만 만족하면 됨
+        if (rsi > 65.0 && ma5 < ma20 && !trend_up) || // RSI 과매수 + 데드크로스 + 하락추세
+           (ma5 < ma20 && candle.volume > avg_volume * 1.5) // 데드크로스 + 적당한 거래량
+        {
             sell_signals.insert(*timestamp, true);
         }
     }
 
     (buy_signals, sell_signals)
 }
-
 #[derive(Debug, Deserialize, Clone)]
 struct UpbitTrade {
     #[serde(rename = "type")]
@@ -886,7 +857,9 @@ impl RTarde {
             self.show_ma20,
             self.show_ma200,
             self.knn_enabled,
-            self.knn_prediction.clone(), // 여기까지가 기존 8개 파라미터
+            self.knn_prediction.clone(),
+            self.knn_buy_signals.clone(),  // 매수 신호 전달
+            self.knn_sell_signals.clone(), // 매도 신호 전달
         ))
         .width(iced::Fill)
         .height(Length::from(800));
@@ -1057,9 +1030,16 @@ impl RTarde {
                     }
                 }
             }
-            Message::MoreCandlesLoaded(new_candles) => {
+            Message::MoreCandlesLoaded(mut new_candles) => {
                 if !new_candles.is_empty() {
-                    self.candlesticks.append(&mut new_candles.clone());
+                    self.candlesticks.append(&mut new_candles);
+
+                    // 새로운 데이터가 로드되면 KNN 신호도 다시 계산
+                    if self.knn_enabled {
+                        let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                        self.knn_buy_signals = buy_signals;
+                        self.knn_sell_signals = sell_signals;
+                    }
                 }
             }
             Message::ToggleMA5 => self.show_ma5 = !self.show_ma5,
@@ -1086,7 +1066,18 @@ impl RTarde {
                             candle_type
                         );
                         self.candlesticks = candles;
+                        // KNN 활성화 상태면 과거 데이터에 대해서도 신호 계산
+                        if self.knn_enabled {
+                            let (buy_signals, sell_signals) =
+                                calculate_knn_signals(&self.candlesticks);
+                            self.knn_buy_signals = buy_signals;
+                            self.knn_sell_signals = sell_signals;
 
+                            // 예측도 업데이트
+                            if let Some(prediction) = self.predict_knn() {
+                                self.knn_prediction = Some(prediction);
+                            }
+                        }
                         // 가장 오래된 캔들의 날짜 저장
                         if let Some((&timestamp, _)) = self.candlesticks.iter().next() {
                             let datetime = chrono::NaiveDateTime::from_timestamp_opt(
@@ -1137,7 +1128,18 @@ impl RTarde {
                                 symbol
                             );
                             self.candlesticks = candles;
+                            // KNN 활성화 상태면 과거 데이터에 대해서도 신호 계산
+                            if self.knn_enabled {
+                                let (buy_signals, sell_signals) =
+                                    calculate_knn_signals(&self.candlesticks);
+                                self.knn_buy_signals = buy_signals;
+                                self.knn_sell_signals = sell_signals;
 
+                                // 예측도 업데이트
+                                if let Some(prediction) = self.predict_knn() {
+                                    self.knn_prediction = Some(prediction);
+                                }
+                            }
                             // 가장 오래된 캔들의 날짜 저장
                             if let Some((&timestamp, _)) = self.candlesticks.iter().next() {
                                 let datetime = chrono::NaiveDateTime::from_timestamp_opt(
@@ -1176,13 +1178,9 @@ impl RTarde {
                     return;
                 }
                 if self.knn_enabled {
-                    // 새로운 데이터가 들어올 때마다 예측 업데이트
-                    if let Some(prediction) = self.predict_knn() {
-                        self.knn_prediction = Some(prediction);
-                        let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
-                        self.knn_buy_signals = buy_signals;
-                        self.knn_sell_signals = sell_signals;
-                    }
+                    let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                    self.knn_buy_signals = buy_signals;
+                    self.knn_sell_signals = sell_signals;
                 }
                 if self.knn_enabled {
                     // 새로운 데이터 추가 시 신호 재계산
@@ -1256,11 +1254,11 @@ impl RTarde {
         if self.candlesticks.len() < 20 {
             return None;
         }
-    
+
         let window_size = 20;
         let data: Vec<(&u64, &Candlestick)> = self.candlesticks.iter().collect();
         let recent_data = &data[data.len().saturating_sub(window_size)..];
-    
+
         // 최근 데이터의 기술적 지표 계산
         let price_changes: Vec<f32> = recent_data
             .windows(2)
@@ -1270,26 +1268,33 @@ impl RTarde {
                 ((curr.close - prev.close) / prev.close) * 100.0
             })
             .collect();
-    
-        let ma5: f32 = recent_data.iter().rev().take(5)
-            .map(|(_, c)| c.close).sum::<f32>() / 5.0;
-        let ma20: f32 = recent_data.iter()
-            .map(|(_, c)| c.close).sum::<f32>() / recent_data.len() as f32;
-    
+
+        let ma5: f32 = recent_data
+            .iter()
+            .rev()
+            .take(5)
+            .map(|(_, c)| c.close)
+            .sum::<f32>()
+            / 5.0;
+        let ma20: f32 =
+            recent_data.iter().map(|(_, c)| c.close).sum::<f32>() / recent_data.len() as f32;
+
         let latest_close = recent_data.last().unwrap().1.close;
         let latest_volume = recent_data.last().unwrap().1.volume;
-        let avg_volume = recent_data.iter()
-            .map(|(_, c)| c.volume)
-            .sum::<f32>() / recent_data.len() as f32;
-    
+        let avg_volume =
+            recent_data.iter().map(|(_, c)| c.volume).sum::<f32>() / recent_data.len() as f32;
+
         // 예측 로직
         let bullish_signals = [
-            latest_close > ma5,              // 현재가가 5일 이평선 위
-            ma5 > ma20,                      // 골든크로스 패턴
-            latest_volume > avg_volume * 1.5, // 거래량 증가
-            price_changes.last().unwrap_or(&0.0) > &0.0 // 최근 상승
-        ].iter().filter(|&&x| x).count();
-    
+            latest_close > ma5,                          // 현재가가 5일 이평선 위
+            ma5 > ma20,                                  // 골든크로스 패턴
+            latest_volume > avg_volume * 1.5,            // 거래량 증가
+            price_changes.last().unwrap_or(&0.0) > &0.0, // 최근 상승
+        ]
+        .iter()
+        .filter(|&&x| x)
+        .count();
+
         Some(if bullish_signals >= 3 {
             "▲".to_string()
         } else {
@@ -1657,65 +1662,52 @@ impl<Message> Program<Message> for Chart {
                 );
             }
         }
+        // Chart의 draw 메서드 내에서 캔들스틱 그린 후에 추가
+        // Chart의 draw 메서드 내에서
         if self.knn_enabled {
-            for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
+            for (i, (timestamp, candle)) in visible_candlesticks.iter().enumerate() {
                 let x =
                     left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
 
-                // 매수 신호
+                // 매수 신호 (파란색 화살표 위로)
                 if self.buy_signals.contains_key(timestamp) {
-                    let signal_y = price_chart_height - 20.0; // 차트 하단에 표시
+                    let signal_y = top_margin + ((max_price - candle.low) * y_scale) + 20.0;
 
-                    // 삼각형 그리기 (매수 신호)
+                    // 화살표 그리기
                     frame.stroke(
                         &canvas::Path::new(|p| {
-                            p.move_to(Point::new(x + body_width / 2.0, signal_y + 10.0));
-                            p.line_to(Point::new(x + body_width / 2.0 - 5.0, signal_y));
-                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y));
-                            p.close();
+                            p.move_to(Point::new(x + body_width / 2.0, signal_y + 15.0));
+                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
+                            p.move_to(Point::new(x + body_width / 2.0 - 5.0, signal_y + 5.0));
+                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
+                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y + 5.0));
                         }),
                         canvas::Stroke::default()
-                            .with_color(Color::from_rgb(0.0, 0.8, 0.0)) // 초록색
+                            .with_color(Color::from_rgb(0.0, 0.8, 1.0))
                             .with_width(2.0),
                     );
-
-                    frame.fill_text(canvas::Text {
-                        content: "BUY".to_string(),
-                        position: Point::new(x + body_width / 2.0 - 10.0, signal_y - 15.0),
-                        color: Color::from_rgb(0.0, 0.8, 0.0),
-                        size: Pixels(12.0),
-                        ..canvas::Text::default()
-                    });
                 }
 
-                // 매도 신호
+                // 매도 신호 (빨간색 화살표 아래로)
                 if self.sell_signals.contains_key(timestamp) {
-                    let signal_y = top_margin + 20.0; // 차트 상단에 표시
+                    let signal_y = top_margin + ((max_price - candle.high) * y_scale) - 20.0;
 
-                    // 역삼각형 그리기 (매도 신호)
+                    // 화살표 그리기
                     frame.stroke(
                         &canvas::Path::new(|p| {
-                            p.move_to(Point::new(x + body_width / 2.0, signal_y - 10.0));
-                            p.line_to(Point::new(x + body_width / 2.0 - 5.0, signal_y));
-                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y));
-                            p.close();
+                            p.move_to(Point::new(x + body_width / 2.0, signal_y - 15.0));
+                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
+                            p.move_to(Point::new(x + body_width / 2.0 - 5.0, signal_y - 5.0));
+                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
+                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y - 5.0));
                         }),
                         canvas::Stroke::default()
-                            .with_color(Color::from_rgb(0.8, 0.0, 0.0)) // 빨간색
+                            .with_color(Color::from_rgb(1.0, 0.0, 0.0))
                             .with_width(2.0),
                     );
-
-                    frame.fill_text(canvas::Text {
-                        content: "SELL".to_string(),
-                        position: Point::new(x + body_width / 2.0 - 10.0, signal_y + 5.0),
-                        color: Color::from_rgb(0.8, 0.0, 0.0),
-                        size: Pixels(12.0),
-                        ..canvas::Text::default()
-                    });
                 }
             }
         }
-
         vec![frame.into_geometry()]
     }
 }
