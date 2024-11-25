@@ -1,5 +1,5 @@
 #![allow(non_utf8_strings)]
-
+use std::collections::VecDeque;
 use futures_util::Stream;
 use iced::futures::{channel::mpsc, SinkExt, StreamExt};
 use iced::time::{self, Duration, Instant};
@@ -104,7 +104,137 @@ pub enum Message {
     ToggleKNN,                           // KNN 시스템 켜기/끄기
     UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
 }
+// KNN 예측기 최적화 버전
+#[derive(Debug, Clone)]
+struct OptimizedKNNPredictor {
+    k: usize,
+    window_size: usize,
+    features_buffer: VecDeque<Vec<f32>>,
+    labels_buffer: VecDeque<bool>,
+    buffer_size: usize,
+}
 
+impl OptimizedKNNPredictor {
+    fn new(k: usize, window_size: usize, buffer_size: usize) -> Self {
+        Self {
+            k,
+            window_size,
+            features_buffer: VecDeque::with_capacity(buffer_size),
+            labels_buffer: VecDeque::with_capacity(buffer_size),
+            buffer_size,
+        }
+    }
+
+    // 특성 추출 최적화
+    fn extract_features(&self, candlesticks: &[(&u64, &Candlestick)]) -> Option<Vec<f32>> {
+        if candlesticks.len() < self.window_size {
+            return None;
+        }
+
+        let mut features = Vec::with_capacity(self.window_size * 4);
+        
+        // 가격 변화율 계산
+        let mut price_changes = Vec::with_capacity(self.window_size - 1);
+        for window in candlesticks.windows(2) {
+            let price_change = ((window[1].1.close - window[0].1.close) / window[0].1.close) * 100.0;
+            price_changes.push(price_change);
+        }
+
+        // 기술적 지표 계산
+        let (ma5, ma20) = self.calculate_moving_averages(candlesticks);
+        let rsi = self.calculate_rsi(&price_changes, 14);
+        let volume_ratio = self.calculate_volume_ratio(candlesticks);
+
+        // 특성 결합
+        features.extend_from_slice(&[
+            ma5 / ma20 - 1.0,  // MA 비율
+            rsi / 100.0,       // 정규화된 RSI
+            volume_ratio,      // 거래량 비율
+            price_changes.last().unwrap_or(&0.0) / 100.0  // 최근 가격 변화
+        ]);
+
+        Some(features)
+    }
+
+    // 이동평균 계산 최적화
+    fn calculate_moving_averages(&self, data: &[(&u64, &Candlestick)]) -> (f32, f32) {
+        let (ma5, ma20) = data.iter().rev().take(20).fold((0.0, 0.0), |acc, (_, candle)| {
+            (
+                if data.len() >= 5 { acc.0 + candle.close / 5.0 } else { acc.0 },
+                acc.1 + candle.close / 20.0
+            )
+        });
+        (ma5, ma20)
+    }
+
+    // RSI 계산 최적화
+    fn calculate_rsi(&self, price_changes: &[f32], period: usize) -> f32 {
+        let (gains, losses): (Vec<_>, Vec<_>) = price_changes
+            .iter()
+            .map(|&change| if change > 0.0 { (change, 0.0) } else { (0.0, -change) })
+            .unzip();
+
+        let avg_gain: f32 = gains.iter().sum::<f32>() / period as f32;
+        let avg_loss: f32 = losses.iter().sum::<f32>() / period as f32;
+
+        if avg_loss == 0.0 {
+            100.0
+        } else {
+            100.0 - (100.0 / (1.0 + (avg_gain / avg_loss)))
+        }
+    }
+
+    // 거래량 비율 계산
+    fn calculate_volume_ratio(&self, data: &[(&u64, &Candlestick)]) -> f32 {
+        let recent_volume = data.last().map(|(_, c)| c.volume).unwrap_or(0.0);
+        let avg_volume = data.iter().map(|(_, c)| c.volume).sum::<f32>() / data.len() as f32;
+        recent_volume / avg_volume
+    }
+
+    // 예측 최적화
+    fn predict(&self, features: &[f32]) -> Option<String> {
+        if self.features_buffer.is_empty() {
+            return None;
+        }
+
+        let mut distances: Vec<(f32, bool)> = self.features_buffer
+            .iter()
+            .zip(self.labels_buffer.iter())
+            .map(|(train_features, &label)| {
+                let distance = self.euclidean_distance(features, train_features);
+                (distance, label)
+            })
+            .collect();
+
+        distances.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        
+        let up_votes = distances.iter()
+            .take(self.k)
+            .filter(|&&(_, label)| label)
+            .count();
+
+        Some(if up_votes > self.k / 2 { "▲" } else { "▼" }.to_string())
+    }
+
+    // 거리 계산 최적화
+    fn euclidean_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+
+    // 학습 데이터 추가 최적화
+    fn add_training_data(&mut self, features: Vec<f32>, label: bool) {
+        if self.features_buffer.len() >= self.buffer_size {
+            self.features_buffer.pop_front();
+            self.labels_buffer.pop_front();
+        }
+        self.features_buffer.push_back(features);
+        self.labels_buffer.push_back(label);
+    }
+}
 struct RTarde {
     timer_enabled: bool,
     candlesticks: BTreeMap<u64, Candlestick>,
@@ -1251,55 +1381,17 @@ impl RTarde {
 
     // KNN 예측 헬퍼 메서드
     fn predict_knn(&self) -> Option<String> {
-        if self.candlesticks.len() < 20 {
+        let predictor = OptimizedKNNPredictor::new(5, 20, 1000);
+        let data: Vec<(&u64, &Candlestick)> = self.candlesticks.iter().collect();
+        if data.len() < predictor.window_size {
             return None;
         }
-
-        let window_size = 20;
-        let data: Vec<(&u64, &Candlestick)> = self.candlesticks.iter().collect();
-        let recent_data = &data[data.len().saturating_sub(window_size)..];
-
-        // 최근 데이터의 기술적 지표 계산
-        let price_changes: Vec<f32> = recent_data
-            .windows(2)
-            .map(|w| {
-                let (_, prev) = w[0];
-                let (_, curr) = w[1];
-                ((curr.close - prev.close) / prev.close) * 100.0
-            })
-            .collect();
-
-        let ma5: f32 = recent_data
-            .iter()
-            .rev()
-            .take(5)
-            .map(|(_, c)| c.close)
-            .sum::<f32>()
-            / 5.0;
-        let ma20: f32 =
-            recent_data.iter().map(|(_, c)| c.close).sum::<f32>() / recent_data.len() as f32;
-
-        let latest_close = recent_data.last().unwrap().1.close;
-        let latest_volume = recent_data.last().unwrap().1.volume;
-        let avg_volume =
-            recent_data.iter().map(|(_, c)| c.volume).sum::<f32>() / recent_data.len() as f32;
-
-        // 예측 로직
-        let bullish_signals = [
-            latest_close > ma5,                          // 현재가가 5일 이평선 위
-            ma5 > ma20,                                  // 골든크로스 패턴
-            latest_volume > avg_volume * 1.5,            // 거래량 증가
-            price_changes.last().unwrap_or(&0.0) > &0.0, // 최근 상승
-        ]
-        .iter()
-        .filter(|&&x| x)
-        .count();
-
-        Some(if bullish_signals >= 3 {
-            "▲".to_string()
+        
+        if let Some(features) = predictor.extract_features(&data[data.len()-predictor.window_size..]) {
+            predictor.predict(&features)
         } else {
-            "▼".to_string()
-        })
+            None
+        }
     }
 }
 
