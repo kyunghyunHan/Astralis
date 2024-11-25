@@ -35,7 +35,6 @@ struct CoinInfo {
     symbol: String,
     name: String,
     price: f64,
-    change_percent: f64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -578,7 +577,6 @@ impl Default for RTarde {
                     symbol: format!("USDT-{}", symbol),
                     name: symbol.to_string(),
                     price: 0.0,
-                    change_percent: 0.0,
                 },
             );
         }
@@ -801,7 +799,8 @@ fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
         let (tx, mut rx) = mpsc::channel(100);
         let mut current_coin = "btcusdt".to_string();
-        
+        let mut last_prices: HashMap<String, f64> = HashMap::new();  // 이전 가격 저장용
+
         yield Message::WebSocketInit(tx.clone());
 
         loop {
@@ -827,10 +826,21 @@ fn binance_connection() -> impl Stream<Item = Message> {
                                         if let Ok(trade) = serde_json::from_str::<BinanceTrade>(&text) {
                                             let symbol = trade.s.replace("USDT", "");
                                             if let Ok(price) = trade.p.parse::<f64>() {
+                                                // 변동률 계산
+                                                let prev_price = *last_prices.get(&symbol).unwrap_or(&price);
+                                                let change_percent = if prev_price != 0.0 {
+                                                    ((price - prev_price) / prev_price) * 100.0
+                                                } else {
+                                                    0.0
+                                                };
+
+                                                // 현재 가격을 이전 가격으로 저장
+                                                last_prices.insert(symbol.clone(), price);
+
                                                 yield Message::UpdatePrice(
                                                     symbol.clone(),
                                                     price,
-                                                    0.0  // 변화율은 나중에 계산
+                                                    change_percent
                                                 );
                                                 yield Message::AddCandlestick((trade.T as u64, trade));
                                             }
@@ -845,7 +855,6 @@ fn binance_connection() -> impl Stream<Item = Message> {
                             }
                         }
                     }
-                    // 연결 종료 처리
                     let _ = ws_stream.close(None).await;
                 }
                 Err(e) => {
@@ -945,19 +954,6 @@ impl RTarde {
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
             let custom_font = Font::with_name("NotoSansCJK");
 
-            // 가격 변화 화살표 (상승/하락)
-            let price_direction = if info.change_percent >= 0.0 {
-                "▲"
-            } else {
-                "▼"
-            };
-
-            let change_color = if info.change_percent >= 0.0 {
-                Color::from_rgb(0.8, 0.0, 0.0)
-            } else {
-                Color::from_rgb(0.0, 0.0, 0.8)
-            };
-
             Column::new()
                 .spacing(10)
                 .push(
@@ -983,25 +979,9 @@ impl RTarde {
                 .push(
                     // 가격 정보
                     Container::new(
-                        Column::new()
-                            .spacing(5)
-                            .push(
-                                // 현재가
-                                Text::new(format!("{:.0} USDT", info.price))
-                                    .size(32)
-                                    .font(custom_font)
-                                    .color(change_color),
-                            )
-                            .push(
-                                // 변동률
-                                Row::new()
-                                    .spacing(5)
-                                    .push(Text::new(price_direction).color(change_color))
-                                    .push(
-                                        Text::new(format!("{:.2}%", info.change_percent.abs()))
-                                            .color(change_color),
-                                    ),
-                            ),
+                        Text::new(format!("{:.2} USDT", info.price))
+                            .size(32)
+                            .font(custom_font),
                     )
                     .padding(15)
                     .width(Length::Fill),
@@ -1297,8 +1277,10 @@ impl RTarde {
             }
             Message::UpdatePrice(symbol, price, change_rate) => {
                 if let Some(info) = self.coin_list.get_mut(&symbol) {
+                    // info.prev_price = info.price;
                     info.price = price;
-                    info.change_percent = change_rate;
+                    // info.change_percent = change_rate;
+                    println!("Price updated for {}: {} ({}%)", symbol, price, change_rate);
                 }
             }
             Message::WebSocketInit(sender) => {
@@ -1363,7 +1345,6 @@ impl RTarde {
             Message::UpdateCoinPrice(symbol, price, change) => {
                 if let Some(info) = self.coin_list.get_mut(&symbol) {
                     info.price = price;
-                    info.change_percent = change;
                 }
             }
             Message::AddCandlestick(trade) => {
