@@ -17,6 +17,8 @@ use iced::{
     },
     Color, Element, Font, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
 };
+use log::{debug, error, info, trace, warn};
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -36,7 +38,36 @@ struct CoinInfo {
     name: String,
     price: f64,
 }
+// 계정 정보를 위한 구조체들
+#[derive(Debug, Deserialize, Clone)]
+struct AccountInfo {
+    balances: Vec<Balance>,
+    #[serde(rename = "totalWalletBalance")]
+    total_wallet_balance: String,
+    #[serde(rename = "totalUnrealizedProfit")]
+    total_unrealized_profit: String,
+}
 
+#[derive(Debug, Deserialize, Clone)]
+struct Balance {
+    asset: String,
+    free: String,
+    locked: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct Position {
+    symbol: String,
+    #[serde(rename = "positionAmt")]
+    position_amt: String,
+    #[serde(rename = "entryPrice")]
+    entry_price: String,
+    #[serde(rename = "unrealizedProfit")]
+    unrealized_profit: String,
+    #[serde(rename = "liquidationPrice")]
+    liquidation_price: String,
+    leverage: String,
+}
 #[derive(Debug, Deserialize, Clone)]
 struct BinanceCandle {
     open_time: u64,
@@ -83,6 +114,9 @@ pub enum Message {
         timestamp: u64,
         indicators: TradeIndicators,
     },
+    UpdateAccountInfo(AccountInfo),
+    UpdatePositions(Vec<Position>),
+    FetchError(String),
 }
 // 거래 지표 정보를 담는 구조체
 #[derive(Debug, Clone)]
@@ -258,6 +292,10 @@ struct RTarde {
     knn_prediction: Option<String>,       // "UP" 또는 "DOWN"
     knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
+    account_info: Option<AccountInfo>,
+    positions: Vec<Position>,
+    api_key: String,
+    api_secret: String,
 }
 
 // Candlestick 구조체 업데이트
@@ -347,6 +385,7 @@ impl<T: 'static> VecDequeExt<T> for VecDeque<(u64, T)> {
         self.iter().skip(range.start).take(range.end - range.start)
     }
 }
+// 계정 정보를 위한 구조체들
 
 impl Chart {
     fn new(
@@ -618,6 +657,10 @@ impl Default for RTarde {
             knn_prediction: None,
             knn_buy_signals: BTreeMap::new(),
             knn_sell_signals: BTreeMap::new(),
+            account_info: None,
+            positions: Vec::new(),
+            api_key: String::from("your_api_key"),
+            api_secret: String::from("your_api_secret"),
         }
     }
 }
@@ -758,7 +801,18 @@ fn calculate_knn_signals(
 
     (buy_signals, sell_signals)
 }
+// HMAC-SHA256 서명 생성 함수
+fn hmac_sha256(secret: &str, message: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
 
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(message.as_bytes());
+    let result = mac.finalize();
+    hex::encode(result.into_bytes())
+}
 #[derive(Debug, Deserialize, Clone)]
 pub struct BinanceTrade {
     pub e: String, // Event type
@@ -782,14 +836,40 @@ fn log_trade_signal(
         .unwrap_or_default()
         .with_timezone(&chrono::Local);
 
-    println!("=== 강한 {} 신호 감지! ===", signal_type);
-    println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
-    println!("가격: {:.2} USDT", price);
-    println!("신호 강도: {:.2}", strength);
-    println!("RSI: {:.2}", indicators.rsi);
-    println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
-    println!("거래량 비율: {:.2}", indicators.volume_ratio);
-    println!("========================");
+    let log_message = format!(
+        "\n=== 강한 {} 신호 감지! ===\n\
+         시간: {}\n\
+         가격: {:.2} USDT\n\
+         신호 강도: {:.2}\n\
+         RSI: {:.2}\n\
+         MA5/MA20: {:.2}/{:.2}\n\
+         거래량 비율: {:.2}\n\
+         ========================",
+        signal_type,
+        dt.format("%Y-%m-%d %H:%M:%S"),
+        price,
+        strength,
+        indicators.rsi,
+        indicators.ma5,
+        indicators.ma20,
+        indicators.volume_ratio
+    );
+
+    // 콘솔과 파일에 모두 로깅
+    info!("{}", log_message);
+
+    // 추가적으로 거래 시그널의 강도에 따라 다른 레벨로 로깅할 수도 있습니다
+    if strength > 0.9 {
+        warn!("매우 강한 {} 신호! 강도: {:.2}", signal_type, strength);
+    }
+
+    // 에러 상황 발생시
+    if indicators.rsi.is_nan() || indicators.ma5.is_nan() || indicators.ma20.is_nan() {
+        error!(
+            "지표 계산 오류 발생! RSI: {}, MA5: {}, MA20: {}",
+            indicators.rsi, indicators.ma5, indicators.ma20
+        );
+    }
 }
 fn calculate_moving_average(
     candlesticks: &BTreeMap<u64, Candlestick>,
@@ -931,12 +1011,148 @@ fn binance_connection() -> impl Stream<Item = Message> {
         }
     }
 }
+fn binance_account_connection() -> impl Stream<Item = Message> {
+    stream! {
+        let client = reqwest::Client::new();
 
+        loop {
+            let timestamp = chrono::Utc::now().timestamp_millis();
+            let query = format!("timestamp={}", timestamp);
+            let signature = hmac_sha256("your_secret", &query);
+
+            // 계정 정보 가져오기
+            let account_url = format!(
+                "https://api.binance.com/api/v3/account?{}&signature={}",
+                query, signature
+            );
+
+            if let Ok(response) = client
+                .get(&account_url)
+                .header("X-MBX-APIKEY", "your_key")
+                .send()
+                .await
+            {
+                if let Ok(account_info) = response.json::<AccountInfo>().await {
+                    yield Message::UpdateAccountInfo(account_info);
+                }
+            }
+
+            // 오픈된 주문 정보 가져오기
+            let positions_url = format!(
+                "https://api.binance.com/api/v3/openOrders?{}&signature={}",
+                query, signature
+            );
+
+            if let Ok(response) = client
+                .get(&positions_url)
+                .header("X-MBX-APIKEY", "your_key")
+                .send()
+                .await
+            {
+                if let Ok(positions) = response.json::<Vec<Position>>().await {
+                    yield Message::UpdatePositions(positions);
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    }
+}
 impl RTarde {
+    fn setup_data_fetch(&self) {
+        let api_key = self.api_key.clone();
+        let api_secret = self.api_secret.clone();
+
+        tokio::spawn(async move {
+            loop {
+                match Self::fetch_account_info(&api_key, &api_secret).await {
+                    Ok(info) => {
+                        // 계정 정보 업데이트 메시지 전송
+                        // subscription을 통해 Message::UpdateAccountInfo(info) 전송
+                    }
+                    Err(e) => {
+                        // 에러 메시지 전송
+                        // subscription을 통해 Message::FetchError(e.to_string()) 전송
+                    }
+                }
+
+                match Self::fetch_positions(&api_key, &api_secret).await {
+                    Ok(positions) => {
+                        // 포지션 정보 업데이트 메시지 전송
+                        // subscription을 통해 Message::UpdatePositions(positions) 전송
+                    }
+                    Err(e) => {
+                        // 에러 메시지 전송
+                        // subscription을 통해 Message::FetchError(e.to_string()) 전송
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        });
+    }
+    async fn fetch_account_info(
+        api_key: &str,
+        api_secret: &str,
+    ) -> Result<AccountInfo, Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+        let timestamp = chrono::Utc::now().timestamp_millis();
+
+        // 서명 생성
+        let query = format!("timestamp={}", timestamp);
+        let signature = hmac_sha256(api_secret, &query);
+
+        let url = format!(
+            "https://api.binance.com/api/v3/account?{}&signature={}",
+            query, signature
+        );
+
+        let response = client
+            .get(&url)
+            .header("X-MBX-APIKEY", api_key)
+            .send()
+            .await?
+            .json::<AccountInfo>()
+            .await?;
+
+        Ok(response)
+    }
+
+    async fn fetch_positions(
+        api_key: &str,
+        api_secret: &str,
+    ) -> Result<Vec<Position>, Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+        let timestamp = chrono::Utc::now().timestamp_millis();
+
+        let query = format!("timestamp={}", timestamp);
+        let signature = hmac_sha256(api_secret, &query);
+
+        let url = format!(
+            "https://api.binance.com/api/v3/openOrders?{}&signature={}",
+            query, signature
+        );
+
+        let response = client
+            .get(&url)
+            .header("X-MBX-APIKEY", api_key)
+            .send()
+            .await?
+            .json::<Vec<Position>>()
+            .await?;
+
+        Ok(response)
+    }
+
+    fn binance_account_subscription(&self) -> Subscription<Message> {
+        Subscription::run(binance_account_connection)
+    }
+
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            // 기존 subscription
+            // 기존 웹소켓 subscription
             self.websocket_subscription(),
+            self.binance_account_subscription(),
         ])
     }
     fn websocket_subscription(&self) -> Subscription<Message> {
@@ -1017,7 +1233,7 @@ impl RTarde {
         .width(Length::Fixed(100.0));
 
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            let custom_font = Font::with_name("NotoSansCJK");
+            // let custom_font = Font::with_name("NotoSansCJK");
 
             Column::new()
                 .spacing(10)
@@ -1028,13 +1244,13 @@ impl RTarde {
                             .push(
                                 Text::new(&info.name)
                                     .size(28)
-                                    .font(custom_font)
+                                    // .font(custom_font)
                                     .width(Length::Fill),
                             )
                             .push(
                                 Text::new(&info.symbol)
                                     .size(14)
-                                    .font(custom_font)
+                                    // .font(custom_font)
                                     .color(Color::from_rgb(0.5, 0.5, 0.5)),
                             ),
                     )
@@ -1044,9 +1260,7 @@ impl RTarde {
                 .push(
                     // 가격 정보
                     Container::new(
-                        Text::new(format!("{:.2} USDT", info.price))
-                            .size(32)
-                            .font(custom_font),
+                        Text::new(format!("{:.2} USDT", info.price)).size(32), // .font(custom_font),
                     )
                     .padding(15)
                     .width(Length::Fill),
@@ -1114,6 +1328,29 @@ impl RTarde {
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
+            .push(
+                Column::new()
+                    .spacing(10)
+                    .push(Text::new("Account Info").size(24))
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(Text::new("Total:"))
+                            .push(Text::new("125,430.50 USDT").size(16)),
+                    )
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(Text::new("24h P/L:"))
+                            .push(Text::new("+2,145.30 USDT").size(16)),
+                    )
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(Text::new("BTC:"))
+                            .push(Text::new("0.85 ($34,250)")),
+                    ),
+            )
             .push(
                 Container::new(Text::new("Order").size(24))
                     .width(Length::Fill)
@@ -1224,6 +1461,15 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::UpdateAccountInfo(info) => {
+                self.account_info = Some(info);
+            }
+            Message::UpdatePositions(positions) => {
+                self.positions = positions;
+            }
+            Message::FetchError(error) => {
+                println!("API Error: {}", error);
+            }
             Message::TryBuy {
                 price,
                 strength,
@@ -1850,10 +2096,11 @@ impl<Message> Program<Message> for Chart {
 }
 
 fn main() -> iced::Result {
+    log4rs::init_file("config/log4rs.yml", Default::default()).unwrap();
+
     iced::application("Candlestick Chart", RTarde::update, RTarde::view)
         .subscription(RTarde::subscription)
         .window_size(Size::new(1980., 1080.))
-        // .font(font_bytes)
         .run()
 }
 
