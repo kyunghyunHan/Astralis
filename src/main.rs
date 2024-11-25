@@ -799,68 +799,54 @@ fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BT
 }
 fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
-        let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@trade").unwrap();
-        println!("Connecting to Binance WebSocket...");
         let (tx, mut rx) = mpsc::channel(100);
-
+        let mut current_coin = "btcusdt".to_string();
+        
         yield Message::WebSocketInit(tx.clone());
 
         loop {
-            match connect_async(url.clone()).await {
+            let url = Url::parse(&format!(
+                "wss://stream.binance.com:9443/ws/{}@trade",
+                current_coin.to_lowercase()
+            )).unwrap();
+
+            match connect_async(url).await {
                 Ok((mut ws_stream, _)) => {
-                    println!("Connected to Binance WebSocket");
+                    println!("Connected to {}", current_coin);
 
                     loop {
                         tokio::select! {
                             Some(new_coin) = rx.next() => {
-                                println!("Received new coin: {}", new_coin);
-                                let new_url = format!("wss://stream.binance.com:9443/ws/{}usdt@trade",
-                                    new_coin.to_lowercase());
-                                println!("Switching to {}", new_url);
+                                println!("Switching to coin: {}", new_coin);
+                                current_coin = format!("{}usdt", new_coin.to_lowercase());
                                 break;
                             }
                             Some(msg) = ws_stream.next() => {
                                 match msg {
-                                    Ok(message) => {
-                                        match message {
-                                            ME::Text(text) => {
-                                                println!("Received raw message: {}", text);
-                                                match serde_json::from_str::<BinanceTrade>(&text) {
-                                                    Ok(trade) => {
-                                                        println!("Parsed trade: {:?}", trade);
-                                                        let symbol = trade.s.replace("USDT", "");
-                                                        let price = match trade.p.parse::<f64>() {
-                                                            Ok(p) => p,
-                                                            Err(e) => {
-                                                                println!("Price parse error: {}", e);
-                                                                continue;
-                                                            }
-                                                        };
-                                                        yield Message::UpdatePrice(
-                                                            symbol.clone(),
-                                                            price,
-                                                            0.0
-                                                        );
-                                                        yield Message::AddCandlestick((trade.T as u64, trade));
-                                                    }
-                                                    Err(e) => println!("JSON parse error: {}", e)
-                                                }
+                                    Ok(ME::Text(text)) => {
+                                        if let Ok(trade) = serde_json::from_str::<BinanceTrade>(&text) {
+                                            let symbol = trade.s.replace("USDT", "");
+                                            if let Ok(price) = trade.p.parse::<f64>() {
+                                                yield Message::UpdatePrice(
+                                                    symbol.clone(),
+                                                    price,
+                                                    0.0  // 변화율은 나중에 계산
+                                                );
+                                                yield Message::AddCandlestick((trade.T as u64, trade));
                                             }
-                                            _ => println!("Received non-text message: {:?}", message)
                                         }
                                     }
                                     Err(e) => {
                                         println!("WebSocket error: {}", e);
                                         break;
                                     }
+                                    _ => {}
                                 }
-                            }
-                            else => {
-                                println!("WebSocket connection closed");
-                                break;
                             }
                         }
                     }
+                    // 연결 종료 처리
+                    let _ = ws_stream.close(None).await;
                 }
                 Err(e) => {
                     println!("Connection error: {}", e);
@@ -868,7 +854,6 @@ fn binance_connection() -> impl Stream<Item = Message> {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             }
-            println!("WebSocket disconnected, reconnecting...");
         }
     }
 }
@@ -1075,11 +1060,12 @@ impl RTarde {
         ))
         .width(iced::Fill)
         .height(Length::from(800));
-
+        //왼쪾 사이드바
         let left_side_bar = Column::new()
             .spacing(20)
             .padding(20)
             .push(current_coin_info);
+        //오른쪽 사이드 바
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
@@ -1310,7 +1296,6 @@ impl RTarde {
                 }
             }
             Message::UpdatePrice(symbol, price, change_rate) => {
-                println!("업데이트");
                 if let Some(info) = self.coin_list.get_mut(&symbol) {
                     info.price = price;
                     info.change_percent = change_rate;
@@ -1436,10 +1421,10 @@ impl RTarde {
                         volume: trade_volume,
                     });
 
-                println!(
-                    "Updated candlestick at {}: price={}, volume={}",
-                    candle_timestamp, trade_price, trade_volume
-                );
+                // println!(
+                //     "Updated candlestick at {}: price={}, volume={}",
+                //     candle_timestamp, trade_price, trade_volume
+                // );
 
                 self.auto_scroll = true;
             }
@@ -1507,10 +1492,10 @@ impl<Message> Program<Message> for Chart {
                     if state.dragging {
                         let delta_x = cursor_position.x - state.drag_start.x; // 드래그 방향과 크기
                         let new_offset = state.last_offset + delta_x;
-                        println!("{}", cursor_position.x);
+                        // println!("{}", cursor_position.x);
                         // 드래그가 좌로 이동했을 때 처리 (delta_x < 0)
                         if delta_x < 0.0 && new_offset < state.offset && !state.need_more_data {
-                            println!("{}", "좌로 드래그 - 이전 데이터 로드 필요");
+                            // println!("{}", "좌로 드래그 - 이전 데이터 로드 필요");
 
                             state.need_more_data = true; // 데이터를 요청해야 한다는 플래그 설정
                         }
@@ -1811,8 +1796,8 @@ async fn fetch_candles_async(
         binance_symbol, interval, count
     );
 
-    println!("Requesting URL: {}", url);
-    println!("데이터를 가져오는 중... 요청된 캔들 수: {}", count);
+    // println!("Requesting URL: {}", url);
+    // println!("데이터를 가져오는 중... 요청된 캔들 수: {}", count);
 
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await?;
@@ -1825,8 +1810,6 @@ async fn fetch_candles_async(
 
     let text = response.text().await?;
     let candles: Vec<BinanceCandle> = serde_json::from_str(&text)?;
-
-    println!("실제로 받은 캔들 수: {}", candles.len()); // 디버깅용 출력 추가
 
     let result: BTreeMap<u64, Candlestick> = candles
         .into_iter()
@@ -1850,8 +1833,6 @@ async fn fetch_candles_async(
         })
         .collect();
 
-    println!("최종 처리된 캔들 수: {}", result.len());
-
     if result.is_empty() {
         Err("No valid candles returned".into())
     } else {
@@ -1864,9 +1845,9 @@ fn fetch_candles(
     to_date: Option<String>, // 추가
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    println!("Fetching {:?} candles for market: {}", candle_type, market);
+    // println!("Fetching {:?} candles for market: {}", candle_type, market);
     if let Some(date) = &to_date {
-        println!("From date: {}", date);
+        // println!("From date: {}", date);
     }
     rt.block_on(fetch_candles_async(market, candle_type, to_date))
 }
