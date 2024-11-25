@@ -37,38 +37,7 @@ struct CoinInfo {
     price: f64,
     change_percent: f64,
 }
-// 새로 추가할 구조체
-struct CandleBuffer {
-    visible_count: usize,  // 화면에 보이는 캔들 수
-    buffer_size: usize,    // 버퍼 크기
-    latest_timestamp: u64, // 가장 최신 데이터 시간
-    oldest_timestamp: u64, // 가장 오래된 데이터 시간
-    loading: bool,         // 데이터 로딩 중 여부
-}
-#[derive(Debug, Deserialize, Clone)]
-struct UpbitCandle {
-    candle_acc_trade_volume: f32,
 
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    high_price: f32,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    low_price: f32,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    opening_price: f32,
-
-    timestamp: u64,
-    #[serde(deserialize_with = "deserialize_f32_or_null")]
-    trade_price: f32,
-}
-#[derive(Debug, Deserialize, Clone)]
-struct UpbitMinuteCandle {
-    opening_price: f64,
-    high_price: f64,
-    low_price: f64,
-    trade_price: f64,
-    timestamp: u64,
-    candle_acc_trade_volume: f64,
-}
 #[derive(Debug, Deserialize, Clone)]
 struct BinanceCandle {
     open_time: u64,
@@ -271,106 +240,7 @@ struct RTarde {
     knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
 }
-#[derive(Debug, Clone)]
-struct KNNPredictor {
-    k: usize,
-    window_size: usize,
-    features: Vec<Vec<f32>>,
-    labels: Vec<bool>, // true = 상승, false = 하락
-}
 
-impl KNNPredictor {
-    fn new(k: usize, window_size: usize) -> Self {
-        Self {
-            k,
-            window_size,
-            features: Vec::new(),
-            labels: Vec::new(),
-        }
-    }
-
-    // 특성 추출
-    fn extract_features(&self, candlesticks: &BTreeMap<u64, Candlestick>) -> Option<Vec<f32>> {
-        if candlesticks.len() < self.window_size {
-            return None;
-        }
-
-        let mut features = Vec::new();
-        let sorted_candles: Vec<_> = candlesticks.iter().collect();
-
-        // 최근 window_size 개의 캔들만 사용
-        let recent_candles = &sorted_candles[sorted_candles.len() - self.window_size..];
-
-        // 가격 변동률
-        let price_changes: Vec<f32> = recent_candles
-            .windows(2)
-            .map(|w| {
-                let (_, prev) = w[0];
-                let (_, curr) = w[1];
-                ((curr.close - prev.close) / prev.close) * 100.0
-            })
-            .collect();
-
-        // RSI 계산을 위한 데이터 준비
-        let mut gains = 0.0;
-        let mut losses = 0.0;
-        for change in price_changes.iter() {
-            if *change > 0.0 {
-                gains += change;
-            } else {
-                losses -= change;
-            }
-        }
-
-        // 특성들 추가
-        features.extend_from_slice(&price_changes);
-        features.push(gains / (self.window_size as f32));
-        features.push(losses / (self.window_size as f32));
-
-        Some(features)
-    }
-
-    // 거리 계산
-    fn euclidean_distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
-
-    // 예측
-    fn predict(&self, features: &[f32]) -> Option<bool> {
-        if self.features.is_empty() {
-            return None;
-        }
-
-        // 모든 훈련 데이터와의 거리 계산
-        let mut distances: Vec<(f32, bool)> = self
-            .features
-            .iter()
-            .zip(&self.labels)
-            .map(|(train_features, &label)| {
-                (self.euclidean_distance(features, train_features), label)
-            })
-            .collect();
-
-        // 거리순으로 정렬
-        distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-        // k개의 가장 가까운 이웃들의 투표
-        let k_nearest = &distances[..self.k];
-        let up_votes = k_nearest.iter().filter(|&&(_, label)| label).count();
-
-        Some(up_votes > self.k / 2)
-    }
-
-    // 학습 데이터 추가
-    fn add_training_data(&mut self, features: Vec<f32>, label: bool) {
-        self.features.push(features);
-        self.labels.push(label);
-    }
-}
 // Candlestick 구조체 업데이트
 #[derive(Debug, Clone)]
 struct Candlestick {
@@ -844,14 +714,7 @@ fn calculate_knn_signals(
 
     (buy_signals, sell_signals)
 }
-#[derive(Debug, Deserialize, Clone)]
-struct UpbitTrade {
-    #[serde(rename = "type")]
-    code: String,
-    timestamp: u64,
-    trade_price: f64,
-    trade_volume: f64,
-}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct BinanceTrade {
     pub e: String, // Event type
@@ -863,20 +726,6 @@ pub struct BinanceTrade {
     pub T: i64,    // Trade time
     pub m: bool,   // Is the buyer the market maker?
     pub M: bool,   // Ignore
-}
-#[derive(Debug, Deserialize, Clone)]
-struct UpbitTradeWS {
-    #[serde(rename = "type")]
-    trade_type: String,
-    code: String,
-    timestamp: u64,
-    trade_timestamp: u64,
-    trade_price: f64,
-    trade_volume: f64,
-    ask_bid: String,
-    prev_closing_price: f64,
-    change: String,
-    change_price: f64,
 }
 
 fn calculate_moving_average(
@@ -1080,22 +929,7 @@ impl RTarde {
         } else {
             Container::new(Space::new(Length::Fill, Length::Shrink))
         };
-        // let knn_controls = Container::new(
-        //     Column::new()
-        //         .spacing(10)
-        //         .push(
-        //             Row::new().spacing(10).push(
-        //                 checkbox("KNN 시스템 활성화", self.knn_enabled)
-        //                     .on_toggle(|_| Message::ToggleKNN),
-        //             ),
-        //         )
-        //         .push(if let Some(prediction) = &self.knn_prediction {
-        //             Text::new(format!("KNN 예측: {}", prediction)).size(16)
-        //         } else {
-        //             Text::new("예측 대기중...").size(16)
-        //         }),
-        // )
-        // .padding(10);
+
         let coins: Vec<String> = self.coin_list.keys().cloned().collect();
 
         let coin_picker = pick_list(coins, Some(self.selected_coin.clone()), Message::SelectCoin)
@@ -1621,10 +1455,6 @@ impl RTarde {
             }
         }
     }
-    fn extract_knn_features(&self) -> Option<Vec<f32>> {
-        let predictor = KNNPredictor::new(5, 20);
-        predictor.extract_features(&self.candlesticks)
-    }
 
     // KNN 예측 헬퍼 메서드
     fn predict_knn(&self) -> Option<String> {
@@ -1953,26 +1783,6 @@ fn main() -> iced::Result {
         .run()
 }
 
-fn deserialize_f32_or_null<'de, D>(deserializer: D) -> Result<f32, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
-
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StringOrNull {
-        String(String),
-        Float(f32),
-        Null,
-    }
-
-    match StringOrNull::deserialize(deserializer)? {
-        StringOrNull::String(s) => s.parse::<f32>().map_err(Error::custom),
-        StringOrNull::Float(f) => Ok(f),
-        StringOrNull::Null => Ok(0.0), // null인 경우 0.0으로 처리
-    }
-}
 async fn fetch_candles_async(
     market: &str,
     candle_type: &CandleType,
