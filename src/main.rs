@@ -417,9 +417,18 @@ struct ChartState {
     need_more_data: bool, // 추가
 }
 
-use serde_json::json;
+// 캐시를 위한 구조체 정의
+#[derive(Default)]
+struct ChartCache {
+    price_range: Option<(f32, f32)>,
+    ma_values: HashMap<usize, VecDeque<(u64, f32)>>, // 이동평균선 캐시
+    rsi_values: VecDeque<(u64, f32)>,                // RSI 캐시
+    last_update: u64,                                // 마지막 업데이트 타임스탬프
+}
 struct Chart {
-    candlesticks: BTreeMap<u64, Candlestick>,
+    candlesticks: VecDeque<(u64, Candlestick)>, // BTreeMap에서 VecDeque로 변경
+    cache: ChartCache,
+    max_data_points: usize, // 최대 데이터 포인트 수
     state: ChartState,
     price_range: Option<(f32, f32)>,
     candle_type: CandleType,
@@ -437,6 +446,17 @@ struct Chart {
     knn_prediction: Option<String>,
     buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
+}
+// 또는 더 유연한 라이프타임을 위해 다음과 같이 수정할 수 있습니다
+// VecDeque에 대한 trait에 라이프타임 추가
+trait VecDequeExt<T: 'static> {
+    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)>;
+}
+
+impl<T: 'static> VecDequeExt<T> for VecDeque<(u64, T)> {
+    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)> {
+        self.iter().skip(range.start).take(range.end - range.start)
+    }
 }
 
 impl Chart {
@@ -480,9 +500,22 @@ impl Chart {
             let margin = (ma_max - ma_min) * 0.1;
             Some((ma_min - margin, ma_max + margin))
         };
+        let max_data_points = 1000; // 저장할 최대 데이터 수
+        let mut candlestick_deque: VecDeque<(u64, Candlestick)> =
+            VecDeque::with_capacity(max_data_points);
+
+        // 정렬된 데이터를 VecDeque에 추가
+        for (timestamp, candle) in candlesticks.into_iter() {
+            if candlestick_deque.len() >= max_data_points {
+                candlestick_deque.pop_front(); // 가장 오래된 데이터 제거
+            }
+            candlestick_deque.push_back((timestamp, candle));
+        }
 
         Self {
-            candlesticks,
+            candlesticks: candlestick_deque,
+            cache: ChartCache::default(),
+            max_data_points,
             state: ChartState {
                 auto_scroll: true,
                 ..ChartState::default()
@@ -503,6 +536,164 @@ impl Chart {
             knn_prediction,
             buy_signals,
             sell_signals,
+        }
+    }
+    fn update_cache(&mut self) {
+        let latest_timestamp = self.candlesticks.back().map(|(ts, _)| *ts).unwrap_or(0);
+
+        // 캐시가 최신 상태면 리턴
+        if latest_timestamp == self.cache.last_update {
+            return;
+        }
+
+        // 가격 범위 계산 및 캐시
+        let (min_price, max_price) = self
+            .candlesticks
+            .iter()
+            .fold((f32::MAX, f32::MIN), |acc, (_, c)| {
+                (acc.0.min(c.low), acc.1.max(c.high))
+            });
+        self.cache.price_range = Some((min_price, max_price));
+
+        // 이동평균선 캐시 업데이트
+        for period in &[5, 10, 20, 200] {
+            self.update_ma_cache(*period);
+        }
+
+        // RSI 캐시 업데이트
+        self.update_rsi_cache();
+
+        self.cache.last_update = latest_timestamp;
+    }
+
+    fn update_rsi_cache(&mut self) {
+        let period = 14;
+        if self.candlesticks.len() < period + 1 {
+            return;
+        }
+
+        while self.cache.rsi_values.len() < self.candlesticks.len() - period {
+            let start_idx = self.cache.rsi_values.len();
+
+            // 임시 벡터에 데이터 수집
+            let window: Vec<(f32, f32)> = self
+                .candlesticks
+                .iter()
+                .skip(start_idx)
+                .take(period + 1)
+                .map(|(_, c)| (c.close, c.close))
+                .collect();
+
+            let (gains, losses): (Vec<f32>, Vec<f32>) = window
+                .windows(2)
+                .map(|w| {
+                    let change = w[1].0 - w[0].0;
+                    if change >= 0.0 {
+                        (change, 0.0)
+                    } else {
+                        (0.0, -change)
+                    }
+                })
+                .unzip();
+
+            let avg_gain = gains.iter().sum::<f32>() / period as f32;
+            let avg_loss = losses.iter().sum::<f32>() / period as f32;
+            let rs = if avg_loss == 0.0 {
+                100.0
+            } else {
+                avg_gain / avg_loss
+            };
+            let rsi = 100.0 - (100.0 / (1.0 + rs));
+
+            // timestamp 가져오기
+            let timestamp = if let Some((ts, _)) = self.candlesticks.get(start_idx + period) {
+                *ts
+            } else {
+                continue;
+            };
+
+            self.cache.rsi_values.push_back((timestamp, rsi));
+
+            if self.cache.rsi_values.len() > self.max_data_points {
+                self.cache.rsi_values.pop_front();
+            }
+        }
+    }
+    fn get_slice(&self, start: usize, len: usize) -> Vec<(u64, f32)> {
+        self.candlesticks
+            .iter()
+            .skip(start)
+            .take(len)
+            .map(|(ts, candle)| (*ts, candle.close))
+            .collect()
+    }
+
+    fn add_candlestick(&mut self, timestamp: u64, candlestick: Candlestick) {
+        // 최대 데이터 포인트 수 유지
+        if self.candlesticks.len() >= self.max_data_points {
+            self.candlesticks.pop_front();
+        }
+        self.candlesticks.push_back((timestamp, candlestick));
+
+        // 캐시 무효화 (다음 업데이트 시 재계산)
+        self.cache.last_update = 0;
+    }
+
+    // 캐시된 값 조회 메서드들
+    fn get_ma(&mut self, period: usize) -> Option<&VecDeque<(u64, f32)>> {
+        self.update_cache();
+        self.cache.ma_values.get(&period)
+    }
+
+    fn get_price_range(&mut self) -> (f32, f32) {
+        self.update_cache();
+        self.cache.price_range.unwrap_or((0.0, 100.0))
+    }
+
+    fn get_rsi(&mut self) -> &VecDeque<(u64, f32)> {
+        self.update_cache();
+        &self.cache.rsi_values
+    }
+
+    fn update_ma_cache(&mut self, period: usize) {
+        if self.candlesticks.len() < period {
+            return;
+        }
+
+        let ma_values = self
+            .cache
+            .ma_values
+            .entry(period)
+            .or_insert_with(|| VecDeque::with_capacity(self.max_data_points));
+
+        while ma_values.len() < self.candlesticks.len() {
+            let start_idx = ma_values.len();
+            if start_idx + period > self.candlesticks.len() {
+                break;
+            }
+
+            // 슬라이스 대신 직접 계산
+            let sum: f32 = self
+                .candlesticks
+                .iter()
+                .skip(start_idx)
+                .take(period)
+                .map(|(_, candle)| candle.close)
+                .sum();
+
+            let ma = sum / period as f32;
+
+            let timestamp = if let Some((ts, _)) = self.candlesticks.get(start_idx) {
+                *ts
+            } else {
+                continue;
+            };
+
+            ma_values.push_back((timestamp, ma));
+
+            if ma_values.len() > self.max_data_points {
+                ma_values.pop_front();
+            }
         }
     }
 }
@@ -1506,7 +1697,6 @@ impl<Message> Program<Message> for Chart {
             _ => (event::Status::Ignored, None),
         }
     }
-
     fn draw(
         &self,
         state: &Self::State,
@@ -1515,10 +1705,6 @@ impl<Message> Program<Message> for Chart {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        if state.need_more_data {
-            // println!("Need more data flag is set!");
-            // RTarde에서 이 상태를 체크하고 데이터를 로드하도록 함
-        }
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         if self.candlesticks.is_empty() {
             return vec![frame.into_geometry()];
@@ -1530,20 +1716,17 @@ impl<Message> Program<Message> for Chart {
         let top_margin = 20.0;
         let bottom_margin = 50.0;
 
-        // 각 차트의 높이 설정
-        let rsi_height = 80.0; // RSI 차트 높이
-        let volume_height = 100.0; // 거래량 차트 높이
-        let charts_gap = 20.0; // 차트 간 간격
-        let margin = 20.0; // 기본 여백
-        let bottom_margin = 40.0;
+        // 차트 영역 설정
+        let price_chart_height = bounds.height * 0.5;
+        let volume_height = 100.0;
+        let rsi_height = 80.0;
+        let charts_gap = 20.0;
+        let margin = 20.0;
 
-        // 가격 차트 높이 계산
-        let price_chart_height = bounds.height * 0.5; // 가격 차트 높이 증가 (75%)
         let remaining_height = bounds.height - price_chart_height - margin - bottom_margin;
         let volume_area_height = remaining_height * 0.5;
         let rsi_area_height = remaining_height * 0.4;
 
-        // 차트 영역 계산
         let price_area_end = margin + price_chart_height;
         let volume_area_start = price_area_end + charts_gap;
         let volume_area_end = volume_area_start + volume_area_height;
@@ -1560,27 +1743,10 @@ impl<Message> Program<Message> for Chart {
         // 가격 범위 계산
         let (mut min_price, mut max_price) = self
             .candlesticks
-            .values()
-            .fold((f32::MAX, f32::MIN), |acc, c| {
+            .iter()
+            .fold((f32::MAX, f32::MIN), |acc, (_, c)| {
                 (acc.0.min(c.low), acc.1.max(c.high))
             });
-
-        // 이동평균선 값도 고려
-        let ma_values = [
-            (self.show_ma5, &self.ma5_values),
-            (self.show_ma10, &self.ma10_values),
-            (self.show_ma20, &self.ma20_values),
-            (self.show_ma200, &self.ma200_values),
-        ];
-
-        for (show, values) in ma_values.iter() {
-            if *show && !values.is_empty() {
-                for &ma_value in values.values() {
-                    min_price = min_price.min(ma_value);
-                    max_price = max_price.max(ma_value);
-                }
-            }
-        }
 
         // 여유 공간 추가
         let price_margin = (max_price - min_price) * 0.1;
@@ -1590,25 +1756,22 @@ impl<Message> Program<Message> for Chart {
         // 거래량 최대값 계산
         let max_volume = self
             .candlesticks
-            .values()
-            .map(|c| c.volume)
+            .iter()
+            .map(|(_, c)| c.volume)
             .fold(0.0, f32::max);
 
         // 캔들스틱 크기 계산
         let available_width = bounds.width - left_margin - right_margin;
         let candles_per_screen = 1000;
-
         let base_candle_width = match self.candle_type {
-            CandleType::Minute1 => 10.0, // 1분봉 크기 증가
-            CandleType::Minute3 => 10.0, // 3분봉 크기 증가
-            CandleType::Day => 10.0,     // 일봉 크기 증가
+            CandleType::Minute1 => 10.0,
+            CandleType::Minute3 => 10.0,
+            CandleType::Day => 10.0,
         };
         let target_position = available_width * 0.95;
         let total_chart_width = candles_per_screen as f32 * base_candle_width;
         let initial_offset = target_position - total_chart_width;
 
-        // 보이는 캔들 수 계산
-        let visible_candles = candles_per_screen;
         let body_width = base_candle_width * 0.8;
 
         // 스케일링 계산
@@ -1643,16 +1806,17 @@ impl<Message> Program<Message> for Chart {
         // 현재 스크롤 위치 계산
         let scroll_offset = (-state.offset / base_candle_width) as usize;
 
-        // 보이는 캔들스틱만 선택
-        let visible_candlesticks: Vec<(&u64, &Candlestick)> = self
+        // visible_candlesticks 생성
+        let visible_candlesticks: Vec<(u64, &Candlestick)> = self
             .candlesticks
             .iter()
             .skip(scroll_offset)
             .take(candles_per_screen)
+            .map(|(ts, candle)| (*ts, candle))
             .collect();
+
         // 캔들스틱과 거래량 바 그리기
-        for (i, (timestamp, candlestick)) in visible_candlesticks.iter().enumerate() {
-            // let x = left_margin + (i as f32 * base_candle_width) + state.offset;
+        for (i, (ts, candlestick)) in visible_candlesticks.iter().enumerate() {
             let x = left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
 
             let color = if candlestick.close >= candlestick.open {
@@ -1661,7 +1825,6 @@ impl<Message> Program<Message> for Chart {
                 Color::from_rgb(0.0, 0.0, 0.8)
             };
 
-            // 캔들스틱 그리기
             let open_y = top_margin + ((max_price - candlestick.open) * y_scale);
             let close_y = top_margin + ((max_price - candlestick.close) * y_scale);
             let high_y = top_margin + ((max_price - candlestick.high) * y_scale);
@@ -1704,13 +1867,13 @@ impl<Message> Program<Message> for Chart {
             if i % 10 == 0 {
                 let time_str = match self.candle_type {
                     CandleType::Minute1 | CandleType::Minute3 => {
-                        let dt = chrono::DateTime::from_timestamp((*timestamp / 1000) as i64, 0)
+                        let dt = chrono::DateTime::from_timestamp((*ts / 1000) as i64, 0)
                             .unwrap_or_default()
                             .with_timezone(&chrono::Local);
                         dt.format("%H:%M").to_string()
                     }
                     CandleType::Day => {
-                        let dt = chrono::DateTime::from_timestamp((*timestamp / 1000) as i64, 0)
+                        let dt = chrono::DateTime::from_timestamp((*ts / 1000) as i64, 0)
                             .unwrap_or_default()
                             .with_timezone(&chrono::Local);
                         dt.format("%m/%d").to_string()
@@ -1719,160 +1882,65 @@ impl<Message> Program<Message> for Chart {
 
                 frame.fill_text(canvas::Text {
                     content: time_str,
-                    position: Point::new(x - 15.0, bounds.height - bottom_margin + 15.0), // 위치 조정
+                    position: Point::new(x - 15.0, bounds.height - bottom_margin + 15.0),
                     color: Color::from_rgb(0.7, 0.7, 0.7),
                     size: Pixels(10.0),
                     ..canvas::Text::default()
                 });
             }
-        }
 
-        // RSI 그리기
-        if self.show_rsi {
-            let mut rsi_path_builder = canvas::path::Builder::new();
-            let mut first_rsi = true;
+            // KNN 신호 그리기
+            if self.knn_enabled {
+                // 매수 신호
+                if let Some(&strength) = self.buy_signals.get(ts) {
+                    let signal_y = top_margin + ((max_price - candlestick.low) * y_scale) + 35.0;
 
-            for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
-                if let Some(&rsi) = self.rsi_values.get(timestamp) {
-                    let x = left_margin
-                        + (i as f32 * base_candle_width)
-                        + initial_offset
-                        + state.offset;
-                    let rsi_y = rsi_area_start + (rsi_area_height * (1.0 - (rsi / 100.0)));
+                    let color = Color::from_rgba(
+                        0.0,                  // R
+                        0.8 * strength,       // G
+                        1.0 * strength,       // B
+                        0.3 + strength * 0.7, // 알파값
+                    );
 
-                    if first_rsi {
-                        rsi_path_builder.move_to(Point::new(x + body_width / 2.0, rsi_y));
-                        first_rsi = false;
-                    } else {
-                        rsi_path_builder.line_to(Point::new(x + body_width / 2.0, rsi_y));
-                    }
-                }
-            }
+                    let base_size = 6.0;
+                    let house_x = x + body_width / 2.0;
 
-            let rsi_path = rsi_path_builder.build();
-            frame.stroke(
-                &rsi_path,
-                canvas::Stroke::default()
-                    .with_color(Color::from_rgb(1.0, 0.5, 0.0))
-                    .with_width(1.5),
-            );
-        }
-
-        // 이동평균선 그리기
-        let ma_lines = [
-            (
-                self.show_ma5,
-                &self.ma5_values,
-                Color::from_rgb(1.0, 1.0, 0.0),
-            ),
-            (
-                self.show_ma10,
-                &self.ma10_values,
-                Color::from_rgb(0.0, 1.0, 0.0),
-            ),
-            (
-                self.show_ma20,
-                &self.ma20_values,
-                Color::from_rgb(1.0, 0.0, 1.0),
-            ),
-            (
-                self.show_ma200,
-                &self.ma200_values,
-                Color::from_rgb(0.0, 1.0, 1.0),
-            ),
-        ];
-
-        for (show, values, color) in ma_lines.iter() {
-            if *show && !values.is_empty() {
-                let mut path_builder = canvas::path::Builder::new();
-                let mut first = true;
-
-                for (i, (timestamp, _)) in visible_candlesticks.iter().enumerate() {
-                    if let Some(&ma_price) = values.get(timestamp) {
-                        // x 좌표 계산 수정
-                        let x = left_margin
-                            + (i as f32 * base_candle_width)
-                            + initial_offset
-                            + state.offset;
-                        let y = top_margin + ((max_price - ma_price) * y_scale);
-
-                        if first {
-                            path_builder.move_to(Point::new(x + body_width / 2.0, y));
-                            first = false;
-                        } else {
-                            path_builder.line_to(Point::new(x + body_width / 2.0, y));
-                        }
-                    }
+                    frame.fill(
+                        &canvas::Path::new(|p| {
+                            p.move_to(Point::new(house_x - base_size, signal_y));
+                            p.line_to(Point::new(house_x, signal_y - base_size * 2.0));
+                            p.line_to(Point::new(house_x + base_size, signal_y));
+                        }),
+                        color,
+                    );
                 }
 
-                let path = path_builder.build();
-                frame.stroke(
-                    &path,
-                    canvas::Stroke::default().with_color(*color).with_width(1.5),
-                );
+                // 매도 신호
+                if let Some(&strength) = self.sell_signals.get(ts) {
+                    let signal_y = top_margin + ((max_price - candlestick.high) * y_scale) - 35.0;
+
+                    let color = Color::from_rgba(
+                        1.0 * strength,       // R
+                        0.0,                  // G
+                        0.5 * strength,       // B
+                        0.3 + strength * 0.7, // 알파값
+                    );
+
+                    let base_size = 6.0;
+                    let house_x = x + body_width / 2.0;
+
+                    frame.fill(
+                        &canvas::Path::new(|p| {
+                            p.move_to(Point::new(house_x - base_size, signal_y));
+                            p.line_to(Point::new(house_x, signal_y + base_size * 2.0));
+                            p.line_to(Point::new(house_x + base_size, signal_y));
+                        }),
+                        color,
+                    );
+                }
             }
         }
-        // Chart의 draw 메서드에서 신호를 그리는 부분:
-        // Chart의 draw 메서드에서 신호를 그리는 부분:
-        // Chart의 draw 메서드에서 신호를 그리는 부분:
-   // Chart의 draw 메서드에서 신호를 그리는 부분:
-if self.knn_enabled {
-    for (i, (timestamp, candle)) in visible_candlesticks.iter().enumerate() {
-        let x = left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
 
-        // 매수 신호 (파란색 삼각형 위로)
-        if let Some(&strength) = self.buy_signals.get(timestamp) {
-            let signal_y = top_margin + ((max_price - candle.low) * y_scale) + 35.0;
-            
-            // 강도에 따른 색상 계산 (파란색)
-            let color = Color::from_rgba(
-                0.0,                // R
-                0.8 * strength,     // G
-                1.0 * strength,     // B
-                0.3 + strength * 0.7 // 알파값
-            );
-
-            let base_size = 6.0;  // 삼각형 크기
-            let house_x = x + body_width / 2.0;
-            
-            // 삼각형 그리기 (위로)
-            frame.fill(
-                &canvas::Path::new(|p| {
-                    p.move_to(Point::new(house_x - base_size, signal_y));
-                    p.line_to(Point::new(house_x, signal_y - base_size * 2.0));
-                    p.line_to(Point::new(house_x + base_size, signal_y));
-                }),
-                color
-            );
-        }
-
-        // 매도 신호 (핑크색 삼각형 아래로)
-        if let Some(&strength) = self.sell_signals.get(timestamp) {
-            let signal_y = top_margin + ((max_price - candle.high) * y_scale) - 35.0;
-            
-            // 강도에 따른 색상 계산 (핑크색)
-            let color = Color::from_rgba(
-                1.0 * strength,      // R
-                0.0,                // G
-                0.5 * strength,     // B
-                0.3 + strength * 0.7 // 알파값
-            );
-
-            let base_size = 6.0;  // 삼각형 크기
-            let house_x = x + body_width / 2.0;
-            
-            // 삼각형 그리기 (아래로)
-            frame.fill(
-                &canvas::Path::new(|p| {
-                    p.move_to(Point::new(house_x - base_size, signal_y));
-                    p.line_to(Point::new(house_x, signal_y + base_size * 2.0));
-                    p.line_to(Point::new(house_x + base_size, signal_y));
-                }),
-                color
-            );
-        }
-    }
-}
         vec![frame.into_geometry()]
     }
 }
