@@ -558,16 +558,21 @@ fn calculate_knn_signals(
 
     for i in window_size..data.len() {
         let (timestamp, candle) = data[i];
-        let window = &data[i-window_size..i];
-        
+        let window = &data[i - window_size..i];
+
         // 이동평균선 계산
-        let ma5: f32 = window.iter().rev().take(5)
-            .map(|(_, c)| c.close).sum::<f32>() / 5.0;
-        let ma20: f32 = window.iter()
-            .map(|(_, c)| c.close).sum::<f32>() / window_size as f32;
+        let ma5: f32 = window
+            .iter()
+            .rev()
+            .take(5)
+            .map(|(_, c)| c.close)
+            .sum::<f32>()
+            / 5.0;
+        let ma20: f32 = window.iter().map(|(_, c)| c.close).sum::<f32>() / window_size as f32;
 
         // RSI 계산
-        let price_changes: Vec<f32> = window.windows(2)
+        let price_changes: Vec<f32> = window
+            .windows(2)
             .map(|w| {
                 let (_, prev) = w[0];
                 let (_, curr) = w[1];
@@ -575,19 +580,30 @@ fn calculate_knn_signals(
             })
             .collect();
 
-        let (gains, losses): (Vec<f32>, Vec<f32>) = price_changes.iter()
-            .map(|&change| if change > 0.0 { (change, 0.0) } else { (0.0, -change) })
+        let (gains, losses): (Vec<f32>, Vec<f32>) = price_changes
+            .iter()
+            .map(|&change| {
+                if change > 0.0 {
+                    (change, 0.0)
+                } else {
+                    (0.0, -change)
+                }
+            })
             .unzip();
 
         let avg_gain = gains.iter().sum::<f32>() / gains.len() as f32;
         let avg_loss = losses.iter().sum::<f32>() / losses.len() as f32;
-        let rs = if avg_loss == 0.0 { 100.0 } else { avg_gain / avg_loss };
+        let rs = if avg_loss == 0.0 {
+            100.0
+        } else {
+            avg_gain / avg_loss
+        };
         let rsi = 100.0 - (100.0 / (1.0 + rs));
 
         // 볼륨 분석
         let avg_volume = window.iter().map(|(_, c)| c.volume).sum::<f32>() / window_size as f32;
         let volume_ratio = candle.volume / avg_volume;
-        
+
         // 매수 신호 강도 계산
         if (rsi < 35.0 && ma5 > ma20) || (ma5 > ma20 && volume_ratio > 1.5) {
             let mut strength = 0.5; // 기본 강도
@@ -610,7 +626,7 @@ fn calculate_knn_signals(
 
             buy_signals.insert(*timestamp, strength.min(1.0));
         }
-        
+
         // 매도 신호 강도 계산
         if (rsi > 65.0 && ma5 < ma20) || (ma5 < ma20 && volume_ratio > 1.5) {
             let mut strength = 0.5; // 기본 강도
@@ -1796,66 +1812,67 @@ impl<Message> Program<Message> for Chart {
                 );
             }
         }
-        if self.knn_enabled {
-            for (i, (timestamp, candle)) in visible_candlesticks.iter().enumerate() {
-                let x = left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
-        
-                // 매수 신호 (파란색 화살표 위로)
-                if let Some(&strength) = self.buy_signals.get(timestamp) {
-                    let signal_y = top_margin + ((max_price - candle.low) * y_scale) + 20.0;
-                    
-                    // 강도에 따른 색상 계산 (파란색)
-                    let color = Color::from_rgba(
-                        0.0,                // R
-                        0.8 * strength,     // G
-                        1.0 * strength,     // B
-                        0.3 + strength * 0.7 // 알파값 (투명도)
-                    );
-        
-                    // 화살표 그리기
-                    frame.stroke(
-                        &canvas::Path::new(|p| {
-                            p.move_to(Point::new(x + body_width / 2.0, signal_y + 15.0));
-                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
-                            p.move_to(Point::new(x + body_width / 2.0 - 5.0, signal_y + 5.0));
-                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
-                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y + 5.0));
-                        }),
-                        canvas::Stroke::default()
-                            .with_color(color)
-                            .with_width(1.0 + strength * 2.0), // 선 굵기도 강도에 따라 변경
-                    );
-                }
-        
-                // 매도 신호 (빨간색 화살표 아래로)
-                if let Some(&strength) = self.sell_signals.get(timestamp) {
-                    let signal_y = top_margin + ((max_price - candle.high) * y_scale) - 20.0;
-                    
-                    // 강도에 따른 색상 계산 (빨간색)
-                    let color = Color::from_rgba(
-                        1.0 * strength,     // R
-                        0.0,               // G
-                        0.0,               // B
-                        0.3 + strength * 0.7 // 알파값 (투명도)
-                    );
-        
-                    // 화살표 그리기
-                    frame.stroke(
-                        &canvas::Path::new(|p| {
-                            p.move_to(Point::new(x + body_width / 2.0, signal_y - 15.0));
-                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
-                            p.move_to(Point::new(x + body_width / 2.0 - 5.0, signal_y - 5.0));
-                            p.line_to(Point::new(x + body_width / 2.0, signal_y));
-                            p.line_to(Point::new(x + body_width / 2.0 + 5.0, signal_y - 5.0));
-                        }),
-                        canvas::Stroke::default()
-                            .with_color(color)
-                            .with_width(1.0 + strength * 2.0), // 선 굵기도 강도에 따라 변경
-                    );
-                }
-            }
+        // Chart의 draw 메서드에서 신호를 그리는 부분:
+        // Chart의 draw 메서드에서 신호를 그리는 부분:
+        // Chart의 draw 메서드에서 신호를 그리는 부분:
+   // Chart의 draw 메서드에서 신호를 그리는 부분:
+if self.knn_enabled {
+    for (i, (timestamp, candle)) in visible_candlesticks.iter().enumerate() {
+        let x = left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
+
+        // 매수 신호 (파란색 삼각형 위로)
+        if let Some(&strength) = self.buy_signals.get(timestamp) {
+            let signal_y = top_margin + ((max_price - candle.low) * y_scale) + 35.0;
+            
+            // 강도에 따른 색상 계산 (파란색)
+            let color = Color::from_rgba(
+                0.0,                // R
+                0.8 * strength,     // G
+                1.0 * strength,     // B
+                0.3 + strength * 0.7 // 알파값
+            );
+
+            let base_size = 6.0;  // 삼각형 크기
+            let house_x = x + body_width / 2.0;
+            
+            // 삼각형 그리기 (위로)
+            frame.fill(
+                &canvas::Path::new(|p| {
+                    p.move_to(Point::new(house_x - base_size, signal_y));
+                    p.line_to(Point::new(house_x, signal_y - base_size * 2.0));
+                    p.line_to(Point::new(house_x + base_size, signal_y));
+                }),
+                color
+            );
         }
 
+        // 매도 신호 (핑크색 삼각형 아래로)
+        if let Some(&strength) = self.sell_signals.get(timestamp) {
+            let signal_y = top_margin + ((max_price - candle.high) * y_scale) - 35.0;
+            
+            // 강도에 따른 색상 계산 (핑크색)
+            let color = Color::from_rgba(
+                1.0 * strength,      // R
+                0.0,                // G
+                0.5 * strength,     // B
+                0.3 + strength * 0.7 // 알파값
+            );
+
+            let base_size = 6.0;  // 삼각형 크기
+            let house_x = x + body_width / 2.0;
+            
+            // 삼각형 그리기 (아래로)
+            frame.fill(
+                &canvas::Path::new(|p| {
+                    p.move_to(Point::new(house_x - base_size, signal_y));
+                    p.line_to(Point::new(house_x, signal_y + base_size * 2.0));
+                    p.line_to(Point::new(house_x + base_size, signal_y));
+                }),
+                color
+            );
+        }
+    }
+}
         vec![frame.into_geometry()]
     }
 }
