@@ -71,6 +71,26 @@ pub enum Message {
     New,
     ToggleKNN,                           // KNN 시스템 켜기/끄기
     UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
+    TryBuy {
+        price: f64,
+        strength: f32,
+        timestamp: u64,
+        indicators: TradeIndicators, // 추가 지표 정보를 위한 구조체
+    },
+    TrySell {
+        price: f64,
+        strength: f32,
+        timestamp: u64,
+        indicators: TradeIndicators,
+    },
+}
+// 거래 지표 정보를 담는 구조체
+#[derive(Debug, Clone)]
+struct TradeIndicators {
+    rsi: f32,
+    ma5: f32,
+    ma20: f32,
+    volume_ratio: f32,
 }
 // KNN 예측기 최적화 버전
 #[derive(Debug, Clone)]
@@ -602,8 +622,10 @@ impl Default for RTarde {
     }
 }
 // KNN 신호 계산 함수 복원
+
 fn calculate_knn_signals(
     candlesticks: &BTreeMap<u64, Candlestick>,
+    is_realtime: bool, // 실시간 여부 파라미터 추가
 ) -> (BTreeMap<u64, f32>, BTreeMap<u64, f32>) {
     let mut buy_signals = BTreeMap::new();
     let mut sell_signals = BTreeMap::new();
@@ -665,48 +687,72 @@ fn calculate_knn_signals(
 
         // 매수 신호 강도 계산
         if (rsi < 35.0 && ma5 > ma20) || (ma5 > ma20 && volume_ratio > 1.5) {
-            let mut strength = 0.5; // 기본 강도
+            let mut strength = 0.5;
 
-            // RSI 기반 강도 조정
             if rsi < 35.0 {
-                strength += (35.0 - rsi) / 35.0 * 0.25; // RSI가 낮을수록 강도 증가
+                strength += (35.0 - rsi) / 35.0 * 0.25;
             }
-
-            // 이동평균선 기반 강도 조정
             if ma5 > ma20 {
                 let ma_diff = (ma5 - ma20) / ma20;
-                strength += ma_diff.min(0.25); // 골든크로스 강도
+                strength += ma_diff.min(0.25);
             }
-
-            // 거래량 기반 강도 조정
             if volume_ratio > 1.5 {
-                strength += ((volume_ratio - 1.5) / 2.0).min(0.25); // 거래량 강도
+                strength += ((volume_ratio - 1.5) / 2.0).min(0.25);
             }
 
-            buy_signals.insert(*timestamp, strength.min(1.0));
+            let final_strength = strength.min(1.0);
+
+            if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
+                log_trade_signal(
+                    "매수", // 매수 신호
+                    candle.close as f64,
+                    final_strength,
+                    *timestamp,
+                    &TradeIndicators {
+                        rsi,
+                        ma5,
+                        ma20,
+                        volume_ratio,
+                    },
+                );
+            }
+
+            buy_signals.insert(*timestamp, final_strength);
         }
 
         // 매도 신호 강도 계산
         if (rsi > 65.0 && ma5 < ma20) || (ma5 < ma20 && volume_ratio > 1.5) {
-            let mut strength = 0.5; // 기본 강도
+            let mut strength = 0.5;
 
-            // RSI 기반 강도 조정
             if rsi > 65.0 {
-                strength += (rsi - 65.0) / 35.0 * 0.25; // RSI가 높을수록 강도 증가
+                strength += (rsi - 65.0) / 35.0 * 0.25;
             }
-
-            // 이동평균선 기반 강도 조정
             if ma5 < ma20 {
                 let ma_diff = (ma20 - ma5) / ma5;
-                strength += ma_diff.min(0.25); // 데드크로스 강도
+                strength += ma_diff.min(0.25);
             }
-
-            // 거래량 기반 강도 조정
             if volume_ratio > 1.5 {
-                strength += ((volume_ratio - 1.5) / 2.0).min(0.25); // 거래량 강도
+                strength += ((volume_ratio - 1.5) / 2.0).min(0.25);
             }
 
-            sell_signals.insert(*timestamp, strength.min(1.0));
+            let final_strength = strength.min(1.0);
+
+            if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
+                log_trade_signal(
+                    "매도", // 매도 신호
+                    candle.close as f64,
+                    final_strength,
+                    *timestamp,
+                    &TradeIndicators {
+                        rsi,
+                        ma5,
+                        ma20,
+                        volume_ratio,
+                    },
+                );
+            }
+
+            sell_signals.insert(*timestamp, final_strength);
         }
     }
 
@@ -725,7 +771,26 @@ pub struct BinanceTrade {
     pub m: bool,   // Is the buyer the market maker?
     pub M: bool,   // Ignore
 }
+fn log_trade_signal(
+    signal_type: &str,
+    price: f64,
+    strength: f32,
+    timestamp: u64,
+    indicators: &TradeIndicators,
+) {
+    let dt = chrono::DateTime::from_timestamp((timestamp / 1000) as i64, 0)
+        .unwrap_or_default()
+        .with_timezone(&chrono::Local);
 
+    println!("=== 강한 {} 신호 감지! ===", signal_type);
+    println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
+    println!("가격: {:.2} USDT", price);
+    println!("신호 강도: {:.2}", strength);
+    println!("RSI: {:.2}", indicators.rsi);
+    println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
+    println!("거래량 비율: {:.2}", indicators.volume_ratio);
+    println!("========================");
+}
 fn calculate_moving_average(
     candlesticks: &BTreeMap<u64, Candlestick>,
     period: usize,
@@ -1159,12 +1224,58 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::TryBuy {
+                price,
+                strength,
+                timestamp,
+                indicators,
+            } => {
+                let dt = chrono::DateTime::from_timestamp((timestamp / 1000) as i64, 0)
+                    .unwrap_or_default()
+                    .with_timezone(&chrono::Local);
+
+                println!("=== 강한 매수 신호 감지! ===");
+                println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
+                println!("코인: {}", self.selected_coin);
+                println!("가격: {:.2} USDT", price);
+                println!("신호 강도: {:.2}", strength);
+                println!("RSI: {:.2}", indicators.rsi);
+                println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
+                println!("거래량 비율: {:.2}", indicators.volume_ratio);
+                println!("========================");
+
+                // 나중에 여기에 실제 매수 로직 추가
+            }
+
+            Message::TrySell {
+                price,
+                strength,
+                timestamp,
+                indicators,
+            } => {
+                let dt = chrono::DateTime::from_timestamp((timestamp / 1000) as i64, 0)
+                    .unwrap_or_default()
+                    .with_timezone(&chrono::Local);
+
+                println!("=== 강한 매도 신호 감지! ===");
+                println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
+                println!("코인: {}", self.selected_coin);
+                println!("가격: {:.2} USDT", price);
+                println!("신호 강도: {:.2}", strength);
+                println!("RSI: {:.2}", indicators.rsi);
+                println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
+                println!("거래량 비율: {:.2}", indicators.volume_ratio);
+                println!("========================");
+
+                // 나중에 여기에 실제 매도 로직 추가
+            }
             Message::ToggleKNN => {
                 self.knn_enabled = !self.knn_enabled;
                 if self.knn_enabled {
                     if let Some(prediction) = self.predict_knn() {
                         self.knn_prediction = Some(prediction);
-                        let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                        let (buy_signals, sell_signals) =
+                            calculate_knn_signals(&self.candlesticks, false);
                         self.knn_buy_signals = buy_signals;
                         self.knn_sell_signals = sell_signals;
                     }
@@ -1213,7 +1324,8 @@ impl RTarde {
 
                     // 새로운 데이터가 로드되면 KNN 신호도 다시 계산
                     if self.knn_enabled {
-                        let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                        let (buy_signals, sell_signals) =
+                            calculate_knn_signals(&self.candlesticks, false); // false 추가
                         self.knn_buy_signals = buy_signals;
                         self.knn_sell_signals = sell_signals;
                     }
@@ -1246,7 +1358,7 @@ impl RTarde {
                         // KNN 활성화 상태면 과거 데이터에 대해서도 신호 계산
                         if self.knn_enabled {
                             let (buy_signals, sell_signals) =
-                                calculate_knn_signals(&self.candlesticks);
+                                calculate_knn_signals(&self.candlesticks, false);
                             self.knn_buy_signals = buy_signals;
                             self.knn_sell_signals = sell_signals;
 
@@ -1280,7 +1392,7 @@ impl RTarde {
                     // info.prev_price = info.price;
                     info.price = price;
                     // info.change_percent = change_rate;
-                    println!("Price updated for {}: {} ({}%)", symbol, price, change_rate);
+                    // println!("Price updated for {}: {} ({}%)", symbol, price, change_rate);
                 }
             }
             Message::WebSocketInit(sender) => {
@@ -1309,7 +1421,7 @@ impl RTarde {
                             // KNN 활성화 상태면 과거 데이터에 대해서도 신호 계산
                             if self.knn_enabled {
                                 let (buy_signals, sell_signals) =
-                                    calculate_knn_signals(&self.candlesticks);
+                                    calculate_knn_signals(&self.candlesticks, false);
                                 self.knn_buy_signals = buy_signals;
                                 self.knn_sell_signals = sell_signals;
 
@@ -1354,14 +1466,10 @@ impl RTarde {
                 if trade_data.s != current_market {
                     return;
                 }
+
                 if self.knn_enabled {
-                    let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
-                    self.knn_buy_signals = buy_signals;
-                    self.knn_sell_signals = sell_signals;
-                }
-                if self.knn_enabled {
-                    // 새로운 데이터 추가 시 신호 재계산
-                    let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks);
+                    let (buy_signals, sell_signals) =
+                        calculate_knn_signals(&self.candlesticks, true); // true로 실시간 표시
                     self.knn_buy_signals = buy_signals;
                     self.knn_sell_signals = sell_signals;
                 }
