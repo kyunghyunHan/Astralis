@@ -47,9 +47,12 @@ struct RTarde {
     knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
     account_info: Option<AccountInfo>,
     positions: Vec<Position>,
-    total_pnl: f64,
     alerts: VecDeque<Alert>,
     alert_timeout: Option<Instant>,
+    auto_trading_enabled: bool,       // 자동매매 활성화 상태
+    last_trade_time: Option<Instant>, // 마지막 거래 시간 (과도한 거래 방지용)
+    alert_sender: mpsc::Sender<(String, AlertType)>,
+    alert_receiver: mpsc::Receiver<(String, AlertType)>,
 }
 #[derive(Debug, Clone)]
 struct Alert {
@@ -99,7 +102,13 @@ pub enum Message {
     FetchError(String),
     AddAlert(String, AlertType),
     RemoveAlert,
-    Tick, // 알림 타이머용
+    Tick,              // 알림 타이머용
+    ToggleAutoTrading, // 자동매매 토글
+}
+#[derive(Debug, Clone, Copy)]
+enum TradeType {
+    Buy,
+    Sell,
 }
 struct Chart {
     candlesticks: VecDeque<(u64, Candlestick)>, // BTreeMap에서 VecDeque로 변경
@@ -337,7 +346,15 @@ fn binance_connection() -> impl Stream<Item = Message> {
         }
     }
 }
-
+async fn execute_trade(
+    selected_coin: String,
+    trade_type: TradeType,
+    price: f64,
+    amount: f64,
+    alert_sender: mpsc::Sender<(String, AlertType)>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
 fn binance_account_connection() -> impl Stream<Item = Message> {
     stream! {
         // 환경변수에서 API 키 읽기
@@ -418,6 +435,8 @@ impl Default for RTarde {
                 },
             );
         }
+        let (alert_sender, alert_receiver) = mpsc::channel(100);
+
         Self {
             candlesticks: fetch_candles("USDT-BTC", &CandleType::Day, None).unwrap_or_default(),
             selected_coin: "BTC".to_string(),
@@ -437,10 +456,13 @@ impl Default for RTarde {
             knn_sell_signals: BTreeMap::new(),
             account_info: None,
             positions: Vec::new(),
-            total_pnl: 0.0,
             // 알림 시스템 관련 필드 추가
             alerts: VecDeque::with_capacity(5), // 최대 5개의 알림을 저장할 수 있는 큐
             alert_timeout: None,
+            auto_trading_enabled: false,
+            last_trade_time: None,
+            alert_sender,
+            alert_receiver,
         }
     }
 }
@@ -632,10 +654,26 @@ impl RTarde {
             .padding(20)
             .push(current_coin_info);
         //오른쪽 사이드 바
-
+        let auto_trading_button = Container::new(
+            Column::new()
+                .spacing(10)
+                .push(Text::new("Auto trading").size(16))
+                .push(
+                    button(Text::new(if self.auto_trading_enabled {
+                        "Auto trading on"
+                    } else {
+                        "Auto trading off"
+                    }))
+                    .on_press(Message::ToggleAutoTrading)
+                    .width(Length::Fill),
+                ),
+        )
+        .padding(10)
+        .width(Length::Fill);
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
+            .push(auto_trading_button)
             .push(
                 Column::new()
                     .spacing(10)
@@ -794,15 +832,16 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::UpdateAccountInfo(info) => {
-                self.account_info = Some(info);
+            Message::ToggleAutoTrading => {
+                self.auto_trading_enabled = !self.auto_trading_enabled;
+                let status = if self.auto_trading_enabled {
+                    "Automatic trading activate"
+                } else {
+                    "Automatic trading deactivate"
+                };
+                self.add_alert(format!("{}", status), AlertType::Info);
             }
-            Message::UpdatePositions(positions) => {
-                self.positions = positions;
-            }
-            Message::FetchError(error) => {
-                println!("API Error: {}", error);
-            }
+
             Message::TryBuy {
                 price,
                 strength,
@@ -822,6 +861,7 @@ impl RTarde {
                 println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
                 println!("거래량 비율: {:.2}", indicators.volume_ratio);
                 println!("========================");
+
                 self.add_alert(
                     format!(
                         "매수 신호 감지!\n가격: {:.2} USDT\n강도: {:.2}\nRSI: {:.2}",
@@ -829,8 +869,106 @@ impl RTarde {
                     ),
                     AlertType::Buy,
                 );
-                // 나중에 여기에 실제 매수 로직 추가
+
+                if self.auto_trading_enabled {
+                    let can_trade = self
+                        .last_trade_time
+                        .map(|time| time.elapsed() > Duration::from_secs(60))
+                        .unwrap_or(true);
+
+                    if can_trade {
+                        let amount = 0.001;
+                        let selected_coin = self.selected_coin.clone();
+                        let alert_sender = self.alert_sender.clone();
+
+                        let runtime = tokio::runtime::Handle::current();
+                        runtime.spawn(async move {
+                            if let Err(e) = execute_trade(
+                                selected_coin,
+                                TradeType::Buy,
+                                price,
+                                amount,
+                                alert_sender,
+                            )
+                            .await
+                            {
+                                println!("매수 실패: {:?}", e);
+                            }
+                        });
+
+                        self.last_trade_time = Some(Instant::now());
+                    }
+                }
             }
+
+            Message::TrySell {
+                price,
+                strength,
+                timestamp,
+                indicators,
+            } => {
+                let dt = chrono::DateTime::from_timestamp((timestamp / 1000) as i64, 0)
+                    .unwrap_or_default()
+                    .with_timezone(&chrono::Local);
+
+                println!("=== 강한 매도 신호 감지! ===");
+                println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
+                println!("코인: {}", self.selected_coin);
+                println!("가격: {:.2} USDT", price);
+                println!("신호 강도: {:.2}", strength);
+                println!("RSI: {:.2}", indicators.rsi);
+                println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
+                println!("거래량 비율: {:.2}", indicators.volume_ratio);
+                println!("========================");
+
+                self.add_alert(
+                    format!(
+                        "매도 신호 감지!\n가격: {:.2} USDT\n강도: {:.2}\nRSI: {:.2}",
+                        price, strength, indicators.rsi
+                    ),
+                    AlertType::Sell,
+                );
+
+                if self.auto_trading_enabled {
+                    let can_trade = self
+                        .last_trade_time
+                        .map(|time| time.elapsed() > Duration::from_secs(60))
+                        .unwrap_or(true);
+
+                    if can_trade {
+                        let amount = 0.001;
+                        let selected_coin = self.selected_coin.clone();
+                        let alert_sender = self.alert_sender.clone();
+
+                        let runtime = tokio::runtime::Handle::current();
+                        runtime.spawn(async move {
+                            if let Err(e) = execute_trade(
+                                selected_coin,
+                                TradeType::Sell,
+                                price,
+                                amount,
+                                alert_sender,
+                            )
+                            .await
+                            {
+                                println!("매도 실패: {:?}", e);
+                            }
+                        });
+
+                        self.last_trade_time = Some(Instant::now());
+                    }
+                }
+            }
+            Message::UpdateAccountInfo(info) => {
+                self.account_info = Some(info);
+            }
+            Message::UpdatePositions(positions) => {
+                self.positions = positions;
+            }
+            Message::FetchError(error) => {
+                println!("API Error: {}", error);
+            }
+
             Message::AddAlert(message, alert_type) => {
                 self.alerts.push_back(Alert {
                     message,
@@ -853,18 +991,7 @@ impl RTarde {
                     }
                 }
             }
-            Message::TrySell {
-                price,
-                strength,
-                timestamp,
-                indicators,
-            } => {
-                let dt = chrono::DateTime::from_timestamp((timestamp / 1000) as i64, 0)
-                    .unwrap_or_default()
-                    .with_timezone(&chrono::Local);
 
-                // 나중에 여기에 실제 매도 로직 추가
-            }
             Message::ToggleKNN => {
                 self.knn_enabled = !self.knn_enabled;
                 if self.knn_enabled {
