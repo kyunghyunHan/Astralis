@@ -1,7 +1,8 @@
 #![allow(non_utf8_strings)]
+use async_stream::stream;
 use dotenv::dotenv;
 use futures_util::Stream;
-use iced::futures::{channel::mpsc, SinkExt, StreamExt};
+use iced::futures::{channel::mpsc, StreamExt};
 use iced::time::{self, Duration, Instant};
 use iced::widget::Row;
 use iced::Length::FillPortion;
@@ -14,20 +15,97 @@ use iced::{
             Canvas, Program,
         },
         checkbox, column, container, pick_list, text, text_input, Checkbox, Column, Container,
-        PickList, Space, Text,
+        Space, Text,
     },
-    Color, Element, Font, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
+    Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
 };
-use log::{debug, error, info, trace, warn};
+use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::env;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
 
-use async_stream::stream;
-use reqwest::Url;
-use serde::{Deserialize, Serialize};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME}; // 여기에 Message를 임포트
+/*===============STRUCT LINE================= */
+struct RTarde {
+    candlesticks: BTreeMap<u64, Candlestick>,
+    selected_coin: String,
+    selected_candle_type: CandleType,
+    coin_list: HashMap<String, CoinInfo>,
+    auto_scroll: bool,
+    ws_sender: Option<mpsc::Sender<String>>,
+    show_ma5: bool,
+    show_ma10: bool,
+    show_ma20: bool,
+    show_ma200: bool,
+    loading_more: bool,          // 추가: 데이터 로딩 중인지 여부
+    oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
+    knn_enabled: bool,
+    knn_prediction: Option<String>,       // "UP" 또는 "DOWN"
+    knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
+    knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
+    account_info: Option<AccountInfo>,
+    positions: Vec<Position>,
+    total_pnl: f64,
+}
+#[derive(Debug, Clone)]
+pub enum Message {
+    AddCandlestick((u64, BinanceTrade)),
+    RemoveCandlestick,
+    SelectCoin(String),
+    UpdateCoinPrice(String, f64, f64),
+    SelectCandleType(CandleType),
+    Error,
+    WebSocketInit(mpsc::Sender<String>),
+    UpdatePrice(String, f64, f64),
+    ToggleMA5,
+    ToggleMA10,
+    ToggleMA20,
+    ToggleMA200,
+    LoadMoreCandles,                               // 추가
+    MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
+    ToggleKNN,                                     // KNN 시스템 켜기/끄기
+    UpdateKNNPrediction(Option<String>),           // 예측 결과 업데이트
+    TryBuy {
+        price: f64,
+        strength: f32,
+        timestamp: u64,
+        indicators: TradeIndicators, // 추가 지표 정보를 위한 구조체
+    },
+    TrySell {
+        price: f64,
+        strength: f32,
+        timestamp: u64,
+        indicators: TradeIndicators,
+    },
+    UpdateAccountInfo(AccountInfo),
+    UpdatePositions(Vec<Position>),
+    FetchError(String),
+    UpdatePnL(f64),
+}
+struct Chart {
+    candlesticks: VecDeque<(u64, Candlestick)>, // BTreeMap에서 VecDeque로 변경
+    max_data_points: usize,                     // 최대 데이터 포인트 수
+    state: ChartState,
+    price_range: Option<(f32, f32)>,
+    candle_type: CandleType,
+    show_ma5: bool,
+    show_ma10: bool,
+    show_ma20: bool,
+    show_ma200: bool,
+    ma5_values: BTreeMap<u64, f32>,
+    ma10_values: BTreeMap<u64, f32>,
+    ma20_values: BTreeMap<u64, f32>,
+    ma200_values: BTreeMap<u64, f32>,
+    rsi_values: BTreeMap<u64, f32>,
+    show_rsi: bool,
+    knn_enabled: bool,
+    knn_prediction: Option<String>,
+    buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
+    sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
+}
+
 #[derive(Debug, Clone)]
 pub enum ScrollDirection {
     Left,
@@ -41,7 +119,7 @@ struct CoinInfo {
 }
 // 계정 정보를 위한 구조체들
 #[derive(Debug, Deserialize, Clone)]
-struct AccountInfo {
+pub struct AccountInfo {
     #[serde(rename = "makerCommission")]
     maker_commission: i32,
     #[serde(rename = "takerCommission")]
@@ -115,41 +193,17 @@ struct BinanceCandle {
     taker_buy_quote_asset_volume: String,
     ignore: String,
 }
-#[derive(Debug, Clone)]
-pub enum Message {
-    AddCandlestick((u64, BinanceTrade)),
-    RemoveCandlestick,
-    SelectCoin(String),
-    UpdateCoinPrice(String, f64, f64),
-    SelectCandleType(CandleType),
-    Error,
-    WebSocketInit(mpsc::Sender<String>),
-    UpdatePrice(String, f64, f64),
-    ToggleMA5,
-    ToggleMA10,
-    ToggleMA20,
-    ToggleMA200,
-    LoadMoreCandles,                               // 추가
-    MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
-    New,
-    ToggleKNN,                           // KNN 시스템 켜기/끄기
-    UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
-    TryBuy {
-        price: f64,
-        strength: f32,
-        timestamp: u64,
-        indicators: TradeIndicators, // 추가 지표 정보를 위한 구조체
-    },
-    TrySell {
-        price: f64,
-        strength: f32,
-        timestamp: u64,
-        indicators: TradeIndicators,
-    },
-    UpdateAccountInfo(AccountInfo),
-    UpdatePositions(Vec<Position>),
-    FetchError(String),
-    UpdatePnL(f64),
+#[derive(Debug, Deserialize, Clone)]
+pub struct BinanceTrade {
+    pub e: String, // Event type
+    pub E: i64,    // Event time
+    pub s: String, // Symbol
+    pub t: i64,    // Trade ID
+    pub p: String, // Price
+    pub q: String, // Quantity
+    pub T: i64,    // Trade time
+    pub m: bool,   // Is the buyer the market maker?
+    pub M: bool,   // Ignore
 }
 // 거래 지표 정보를 담는 구조체
 #[derive(Debug, Clone)]
@@ -168,170 +222,6 @@ struct OptimizedKNNPredictor {
     labels_buffer: VecDeque<bool>,
     buffer_size: usize,
 }
-
-impl OptimizedKNNPredictor {
-    fn new(k: usize, window_size: usize, buffer_size: usize) -> Self {
-        Self {
-            k,
-            window_size,
-            features_buffer: VecDeque::with_capacity(buffer_size),
-            labels_buffer: VecDeque::with_capacity(buffer_size),
-            buffer_size,
-        }
-    }
-
-    // 특성 추출 최적화
-    fn extract_features(&self, candlesticks: &[(&u64, &Candlestick)]) -> Option<Vec<f32>> {
-        if candlesticks.len() < self.window_size {
-            return None;
-        }
-
-        let mut features = Vec::with_capacity(self.window_size * 4);
-
-        // 가격 변화율 계산
-        let mut price_changes = Vec::with_capacity(self.window_size - 1);
-        for window in candlesticks.windows(2) {
-            let price_change =
-                ((window[1].1.close - window[0].1.close) / window[0].1.close) * 100.0;
-            price_changes.push(price_change);
-        }
-
-        // 기술적 지표 계산
-        let (ma5, ma20) = self.calculate_moving_averages(candlesticks);
-        let rsi = self.calculate_rsi(&price_changes, 14);
-        let volume_ratio = self.calculate_volume_ratio(candlesticks);
-
-        // 특성 결합
-        features.extend_from_slice(&[
-            ma5 / ma20 - 1.0,                             // MA 비율
-            rsi / 100.0,                                  // 정규화된 RSI
-            volume_ratio,                                 // 거래량 비율
-            price_changes.last().unwrap_or(&0.0) / 100.0, // 최근 가격 변화
-        ]);
-
-        Some(features)
-    }
-
-    // 이동평균 계산 최적화
-    fn calculate_moving_averages(&self, data: &[(&u64, &Candlestick)]) -> (f32, f32) {
-        let (ma5, ma20) = data
-            .iter()
-            .rev()
-            .take(20)
-            .fold((0.0, 0.0), |acc, (_, candle)| {
-                (
-                    if data.len() >= 5 {
-                        acc.0 + candle.close / 5.0
-                    } else {
-                        acc.0
-                    },
-                    acc.1 + candle.close / 20.0,
-                )
-            });
-        (ma5, ma20)
-    }
-
-    // RSI 계산 최적화
-    fn calculate_rsi(&self, price_changes: &[f32], period: usize) -> f32 {
-        let (gains, losses): (Vec<_>, Vec<_>) = price_changes
-            .iter()
-            .map(|&change| {
-                if change > 0.0 {
-                    (change, 0.0)
-                } else {
-                    (0.0, -change)
-                }
-            })
-            .unzip();
-
-        let avg_gain: f32 = gains.iter().sum::<f32>() / period as f32;
-        let avg_loss: f32 = losses.iter().sum::<f32>() / period as f32;
-
-        if avg_loss == 0.0 {
-            100.0
-        } else {
-            100.0 - (100.0 / (1.0 + (avg_gain / avg_loss)))
-        }
-    }
-
-    // 거래량 비율 계산
-    fn calculate_volume_ratio(&self, data: &[(&u64, &Candlestick)]) -> f32 {
-        let recent_volume = data.last().map(|(_, c)| c.volume).unwrap_or(0.0);
-        let avg_volume = data.iter().map(|(_, c)| c.volume).sum::<f32>() / data.len() as f32;
-        recent_volume / avg_volume
-    }
-
-    // 예측 최적화
-    fn predict(&self, features: &[f32]) -> Option<String> {
-        if self.features_buffer.is_empty() {
-            return None;
-        }
-
-        let mut distances: Vec<(f32, bool)> = self
-            .features_buffer
-            .iter()
-            .zip(self.labels_buffer.iter())
-            .map(|(train_features, &label)| {
-                let distance = self.euclidean_distance(features, train_features);
-                (distance, label)
-            })
-            .collect();
-
-        distances.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-        let up_votes = distances
-            .iter()
-            .take(self.k)
-            .filter(|&&(_, label)| label)
-            .count();
-
-        Some(if up_votes > self.k / 2 { "▲" } else { "▼" }.to_string())
-    }
-
-    // 거리 계산 최적화
-    fn euclidean_distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
-
-    // 학습 데이터 추가 최적화
-    fn add_training_data(&mut self, features: Vec<f32>, label: bool) {
-        if self.features_buffer.len() >= self.buffer_size {
-            self.features_buffer.pop_front();
-            self.labels_buffer.pop_front();
-        }
-        self.features_buffer.push_back(features);
-        self.labels_buffer.push_back(label);
-    }
-}
-struct RTarde {
-    timer_enabled: bool,
-    candlesticks: BTreeMap<u64, Candlestick>,
-    selected_coin: String,
-    selected_candle_type: CandleType,
-    coin_list: HashMap<String, CoinInfo>,
-    auto_scroll: bool,
-    ws_sender: Option<mpsc::Sender<String>>,
-    show_ma5: bool,
-    show_ma10: bool,
-    show_ma20: bool,
-    show_ma200: bool,
-    loading_more: bool,          // 추가: 데이터 로딩 중인지 여부
-    oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
-    knn_enabled: bool,
-    knn_prediction: Option<String>,       // "UP" 또는 "DOWN"
-    knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
-    knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
-    account_info: Option<AccountInfo>,
-    positions: Vec<Position>,
-    api_key: String,
-    api_secret: String,
-    total_pnl: f64,
-}
-
 // Candlestick 구조체 업데이트
 #[derive(Debug, Clone)]
 struct Candlestick {
@@ -348,25 +238,6 @@ pub enum CandleType {
     Minute3, // 2분봉을 3분봉으로 변경
     Day,
 }
-impl CandleType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            CandleType::Minute1 => "1Minute",
-            CandleType::Minute3 => "3Minute", // 표시 텍스트 변경
-            CandleType::Day => "Day",
-        }
-    }
-}
-
-impl std::fmt::Display for CandleType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CandleType::Minute1 => write!(f, "1Minute"),
-            CandleType::Minute3 => write!(f, "3Minute"), // 표시 텍스트 변경
-            CandleType::Day => write!(f, "Day"),
-        }
-    }
-}
 
 #[derive(Default)]
 struct ChartState {
@@ -377,567 +248,7 @@ struct ChartState {
     auto_scroll: bool,
     need_more_data: bool, // 추가
 }
-
-// 캐시를 위한 구조체 정의
-#[derive(Default)]
-struct ChartCache {
-    price_range: Option<(f32, f32)>,
-    ma_values: HashMap<usize, VecDeque<(u64, f32)>>, // 이동평균선 캐시
-    rsi_values: VecDeque<(u64, f32)>,                // RSI 캐시
-    last_update: u64,                                // 마지막 업데이트 타임스탬프
-}
-struct Chart {
-    candlesticks: VecDeque<(u64, Candlestick)>, // BTreeMap에서 VecDeque로 변경
-    cache: ChartCache,
-    max_data_points: usize, // 최대 데이터 포인트 수
-    state: ChartState,
-    price_range: Option<(f32, f32)>,
-    candle_type: CandleType,
-    show_ma5: bool,
-    show_ma10: bool,
-    show_ma20: bool,
-    show_ma200: bool,
-    ma5_values: BTreeMap<u64, f32>,
-    ma10_values: BTreeMap<u64, f32>,
-    ma20_values: BTreeMap<u64, f32>,
-    ma200_values: BTreeMap<u64, f32>,
-    rsi_values: BTreeMap<u64, f32>,
-    show_rsi: bool,
-    knn_enabled: bool,
-    knn_prediction: Option<String>,
-    buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
-    sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
-}
-// 또는 더 유연한 라이프타임을 위해 다음과 같이 수정할 수 있습니다
-// VecDeque에 대한 trait에 라이프타임 추가
-trait VecDequeExt<T: 'static> {
-    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)>;
-}
-
-impl<T: 'static> VecDequeExt<T> for VecDeque<(u64, T)> {
-    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)> {
-        self.iter().skip(range.start).take(range.end - range.start)
-    }
-}
-// 계정 정보를 위한 구조체들
-
-impl Chart {
-    fn new(
-        candlesticks: BTreeMap<u64, Candlestick>,
-        candle_type: CandleType,
-        show_ma5: bool,
-        show_ma10: bool,
-        show_ma20: bool,
-        show_ma200: bool,
-        knn_enabled: bool,
-        knn_prediction: Option<String>,
-        buy_signals: BTreeMap<u64, f32>,  // 타입 변경
-        sell_signals: BTreeMap<u64, f32>, // 타입 변경
-    ) -> Self {
-        let ma5_values = calculate_moving_average(&candlesticks, 5);
-        let ma10_values = calculate_moving_average(&candlesticks, 10);
-        let ma20_values = calculate_moving_average(&candlesticks, 20);
-        let ma200_values = calculate_moving_average(&candlesticks, 200);
-        let rsi_values = calculate_rsi(&candlesticks, 14);
-
-        let price_range = if candlesticks.is_empty() {
-            Some((0.0, 100.0))
-        } else {
-            let (min, max) = candlesticks.values().fold((f32::MAX, f32::MIN), |acc, c| {
-                (acc.0.min(c.low), acc.1.max(c.high))
-            });
-
-            let ma_min = [&ma5_values, &ma10_values, &ma20_values, &ma200_values]
-                .iter()
-                .filter(|ma| !ma.is_empty())
-                .flat_map(|ma| ma.values())
-                .fold(min, |acc, &x| acc.min(x));
-
-            let ma_max = [&ma5_values, &ma10_values, &ma20_values, &ma200_values]
-                .iter()
-                .filter(|ma| !ma.is_empty())
-                .flat_map(|ma| ma.values())
-                .fold(max, |acc, &x| acc.max(x));
-
-            let margin = (ma_max - ma_min) * 0.1;
-            Some((ma_min - margin, ma_max + margin))
-        };
-        let max_data_points = 1000; // 저장할 최대 데이터 수
-        let mut candlestick_deque: VecDeque<(u64, Candlestick)> =
-            VecDeque::with_capacity(max_data_points);
-
-        // 정렬된 데이터를 VecDeque에 추가
-        for (timestamp, candle) in candlesticks.into_iter() {
-            if candlestick_deque.len() >= max_data_points {
-                candlestick_deque.pop_front(); // 가장 오래된 데이터 제거
-            }
-            candlestick_deque.push_back((timestamp, candle));
-        }
-
-        Self {
-            candlesticks: candlestick_deque,
-            cache: ChartCache::default(),
-            max_data_points,
-            state: ChartState {
-                auto_scroll: true,
-                ..ChartState::default()
-            },
-            price_range,
-            candle_type,
-            show_ma5,
-            show_ma10,
-            show_ma20,
-            show_ma200,
-            ma5_values,
-            ma10_values,
-            ma20_values,
-            ma200_values,
-            rsi_values,
-            show_rsi: true,
-            knn_enabled,
-            knn_prediction,
-            buy_signals,
-            sell_signals,
-        }
-    }
-    fn update_cache(&mut self) {
-        let latest_timestamp = self.candlesticks.back().map(|(ts, _)| *ts).unwrap_or(0);
-
-        // 캐시가 최신 상태면 리턴
-        if latest_timestamp == self.cache.last_update {
-            return;
-        }
-
-        // 가격 범위 계산 및 캐시
-        let (min_price, max_price) = self
-            .candlesticks
-            .iter()
-            .fold((f32::MAX, f32::MIN), |acc, (_, c)| {
-                (acc.0.min(c.low), acc.1.max(c.high))
-            });
-        self.cache.price_range = Some((min_price, max_price));
-
-        // 이동평균선 캐시 업데이트
-        for period in &[5, 10, 20, 200] {
-            self.update_ma_cache(*period);
-        }
-
-        // RSI 캐시 업데이트
-        self.update_rsi_cache();
-
-        self.cache.last_update = latest_timestamp;
-    }
-
-    fn update_rsi_cache(&mut self) {
-        let period = 14;
-        if self.candlesticks.len() < period + 1 {
-            return;
-        }
-
-        while self.cache.rsi_values.len() < self.candlesticks.len() - period {
-            let start_idx = self.cache.rsi_values.len();
-
-            // 임시 벡터에 데이터 수집
-            let window: Vec<(f32, f32)> = self
-                .candlesticks
-                .iter()
-                .skip(start_idx)
-                .take(period + 1)
-                .map(|(_, c)| (c.close, c.close))
-                .collect();
-
-            let (gains, losses): (Vec<f32>, Vec<f32>) = window
-                .windows(2)
-                .map(|w| {
-                    let change = w[1].0 - w[0].0;
-                    if change >= 0.0 {
-                        (change, 0.0)
-                    } else {
-                        (0.0, -change)
-                    }
-                })
-                .unzip();
-
-            let avg_gain = gains.iter().sum::<f32>() / period as f32;
-            let avg_loss = losses.iter().sum::<f32>() / period as f32;
-            let rs = if avg_loss == 0.0 {
-                100.0
-            } else {
-                avg_gain / avg_loss
-            };
-            let rsi = 100.0 - (100.0 / (1.0 + rs));
-
-            // timestamp 가져오기
-            let timestamp = if let Some((ts, _)) = self.candlesticks.get(start_idx + period) {
-                *ts
-            } else {
-                continue;
-            };
-
-            self.cache.rsi_values.push_back((timestamp, rsi));
-
-            if self.cache.rsi_values.len() > self.max_data_points {
-                self.cache.rsi_values.pop_front();
-            }
-        }
-    }
-    fn get_slice(&self, start: usize, len: usize) -> Vec<(u64, f32)> {
-        self.candlesticks
-            .iter()
-            .skip(start)
-            .take(len)
-            .map(|(ts, candle)| (*ts, candle.close))
-            .collect()
-    }
-
-    fn add_candlestick(&mut self, timestamp: u64, candlestick: Candlestick) {
-        // 최대 데이터 포인트 수 유지
-        if self.candlesticks.len() >= self.max_data_points {
-            self.candlesticks.pop_front();
-        }
-        self.candlesticks.push_back((timestamp, candlestick));
-
-        // 캐시 무효화 (다음 업데이트 시 재계산)
-        self.cache.last_update = 0;
-    }
-
-    // 캐시된 값 조회 메서드들
-    fn get_ma(&mut self, period: usize) -> Option<&VecDeque<(u64, f32)>> {
-        self.update_cache();
-        self.cache.ma_values.get(&period)
-    }
-
-    fn get_price_range(&mut self) -> (f32, f32) {
-        self.update_cache();
-        self.cache.price_range.unwrap_or((0.0, 100.0))
-    }
-
-    fn get_rsi(&mut self) -> &VecDeque<(u64, f32)> {
-        self.update_cache();
-        &self.cache.rsi_values
-    }
-
-    fn update_ma_cache(&mut self, period: usize) {
-        if self.candlesticks.len() < period {
-            return;
-        }
-
-        let ma_values = self
-            .cache
-            .ma_values
-            .entry(period)
-            .or_insert_with(|| VecDeque::with_capacity(self.max_data_points));
-
-        while ma_values.len() < self.candlesticks.len() {
-            let start_idx = ma_values.len();
-            if start_idx + period > self.candlesticks.len() {
-                break;
-            }
-
-            // 슬라이스 대신 직접 계산
-            let sum: f32 = self
-                .candlesticks
-                .iter()
-                .skip(start_idx)
-                .take(period)
-                .map(|(_, candle)| candle.close)
-                .sum();
-
-            let ma = sum / period as f32;
-
-            let timestamp = if let Some((ts, _)) = self.candlesticks.get(start_idx) {
-                *ts
-            } else {
-                continue;
-            };
-
-            ma_values.push_back((timestamp, ma));
-
-            if ma_values.len() > self.max_data_points {
-                ma_values.pop_front();
-            }
-        }
-    }
-}
-
-impl Default for RTarde {
-    fn default() -> Self {
-        let mut coin_list = HashMap::new();
-        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT"] {
-            coin_list.insert(
-                symbol.to_string(),
-                CoinInfo {
-                    symbol: format!("USDT-{}", symbol),
-                    name: symbol.to_string(),
-                    price: 0.0,
-                },
-            );
-        }
-        Self {
-            candlesticks: fetch_candles("USDT-BTC", &CandleType::Day, None).unwrap_or_default(),
-            timer_enabled: true,
-            selected_coin: "BTC".to_string(),
-            selected_candle_type: CandleType::Day,
-            coin_list,
-            auto_scroll: true,
-            ws_sender: None,
-            show_ma5: false,
-            show_ma10: false,
-            show_ma20: false,
-            show_ma200: false,
-            loading_more: false,
-            oldest_date: None,
-            knn_enabled: false,
-            knn_prediction: None,
-            knn_buy_signals: BTreeMap::new(),
-            knn_sell_signals: BTreeMap::new(),
-            account_info: None,
-            positions: Vec::new(),
-            api_key: String::from("your_api_key"),
-            api_secret: String::from("your_api_secret"),
-            total_pnl: 0.0, // 초기값 0.0으로 설정
-        }
-    }
-}
-// KNN 신호 계산 함수 복원
-
-fn calculate_knn_signals(
-    candlesticks: &BTreeMap<u64, Candlestick>,
-    is_realtime: bool, // 실시간 여부 파라미터 추가
-) -> (BTreeMap<u64, f32>, BTreeMap<u64, f32>) {
-    let mut buy_signals = BTreeMap::new();
-    let mut sell_signals = BTreeMap::new();
-
-    let window_size = 20;
-    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
-
-    if data.len() < window_size {
-        return (buy_signals, sell_signals);
-    }
-
-    for i in window_size..data.len() {
-        let (timestamp, candle) = data[i];
-        let window = &data[i - window_size..i];
-
-        // 이동평균선 계산
-        let ma5: f32 = window
-            .iter()
-            .rev()
-            .take(5)
-            .map(|(_, c)| c.close)
-            .sum::<f32>()
-            / 5.0;
-        let ma20: f32 = window.iter().map(|(_, c)| c.close).sum::<f32>() / window_size as f32;
-
-        // RSI 계산
-        let price_changes: Vec<f32> = window
-            .windows(2)
-            .map(|w| {
-                let (_, prev) = w[0];
-                let (_, curr) = w[1];
-                curr.close - prev.close
-            })
-            .collect();
-
-        let (gains, losses): (Vec<f32>, Vec<f32>) = price_changes
-            .iter()
-            .map(|&change| {
-                if change > 0.0 {
-                    (change, 0.0)
-                } else {
-                    (0.0, -change)
-                }
-            })
-            .unzip();
-
-        let avg_gain = gains.iter().sum::<f32>() / gains.len() as f32;
-        let avg_loss = losses.iter().sum::<f32>() / losses.len() as f32;
-        let rs = if avg_loss == 0.0 {
-            100.0
-        } else {
-            avg_gain / avg_loss
-        };
-        let rsi = 100.0 - (100.0 / (1.0 + rs));
-
-        // 볼륨 분석
-        let avg_volume = window.iter().map(|(_, c)| c.volume).sum::<f32>() / window_size as f32;
-        let volume_ratio = candle.volume / avg_volume;
-
-        // 매수 신호 강도 계산
-        if (rsi < 35.0 && ma5 > ma20) || (ma5 > ma20 && volume_ratio > 1.5) {
-            let mut strength = 0.5;
-
-            if rsi < 35.0 {
-                strength += (35.0 - rsi) / 35.0 * 0.25;
-            }
-            if ma5 > ma20 {
-                let ma_diff = (ma5 - ma20) / ma20;
-                strength += ma_diff.min(0.25);
-            }
-            if volume_ratio > 1.5 {
-                strength += ((volume_ratio - 1.5) / 2.0).min(0.25);
-            }
-
-            let final_strength = strength.min(1.0);
-
-            if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
-                log_trade_signal(
-                    "매수", // 매수 신호
-                    candle.close as f64,
-                    final_strength,
-                    *timestamp,
-                    &TradeIndicators {
-                        rsi,
-                        ma5,
-                        ma20,
-                        volume_ratio,
-                    },
-                );
-            }
-
-            buy_signals.insert(*timestamp, final_strength);
-        }
-
-        // 매도 신호 강도 계산
-        if (rsi > 65.0 && ma5 < ma20) || (ma5 < ma20 && volume_ratio > 1.5) {
-            let mut strength = 0.5;
-
-            if rsi > 65.0 {
-                strength += (rsi - 65.0) / 35.0 * 0.25;
-            }
-            if ma5 < ma20 {
-                let ma_diff = (ma20 - ma5) / ma5;
-                strength += ma_diff.min(0.25);
-            }
-            if volume_ratio > 1.5 {
-                strength += ((volume_ratio - 1.5) / 2.0).min(0.25);
-            }
-
-            let final_strength = strength.min(1.0);
-
-            if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
-                log_trade_signal(
-                    "매도", // 매도 신호
-                    candle.close as f64,
-                    final_strength,
-                    *timestamp,
-                    &TradeIndicators {
-                        rsi,
-                        ma5,
-                        ma20,
-                        volume_ratio,
-                    },
-                );
-            }
-
-            sell_signals.insert(*timestamp, final_strength);
-        }
-    }
-
-    (buy_signals, sell_signals)
-}
-// HMAC-SHA256 서명 생성 함수
-fn hmac_sha256(secret: &str, message: &str) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-    type HmacSha256 = Hmac<Sha256>;
-
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
-    mac.update(message.as_bytes());
-    let result = mac.finalize();
-    hex::encode(result.into_bytes())
-}
-#[derive(Debug, Deserialize, Clone)]
-pub struct BinanceTrade {
-    pub e: String, // Event type
-    pub E: i64,    // Event time
-    pub s: String, // Symbol
-    pub t: i64,    // Trade ID
-    pub p: String, // Price
-    pub q: String, // Quantity
-    pub T: i64,    // Trade time
-    pub m: bool,   // Is the buyer the market maker?
-    pub M: bool,   // Ignore
-}
-fn log_trade_signal(
-    signal_type: &str,
-    price: f64,
-    strength: f32,
-    timestamp: u64,
-    indicators: &TradeIndicators,
-) {
-    println!("{}", "강한 신호")
-}
-fn calculate_moving_average(
-    candlesticks: &BTreeMap<u64, Candlestick>,
-    period: usize,
-) -> BTreeMap<u64, f32> {
-    let mut result = BTreeMap::new();
-    if period == 0 || candlesticks.is_empty() {
-        return result;
-    }
-
-    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
-
-    // 모든 캔들에 대해 이동평균 계산
-    for i in 0..data.len() {
-        if i >= period - 1 {
-            let sum: f32 = data[i + 1 - period..=i]
-                .iter()
-                .map(|(_, candle)| candle.close)
-                .sum();
-            let avg = sum / period as f32;
-            result.insert(*data[i].0, avg);
-        }
-    }
-
-    result
-}
-fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BTreeMap<u64, f32> {
-    let mut rsi_values = BTreeMap::new();
-    if candlesticks.len() < period + 1 {
-        return rsi_values;
-    }
-
-    let mut gains = Vec::new();
-    let mut losses = Vec::new();
-    let mut prev_close = None;
-    let mut timestamps = Vec::new();
-
-    // 가격 변화 계산
-    for (timestamp, candle) in candlesticks.iter() {
-        if let Some(prev) = prev_close {
-            let change = candle.close - prev;
-            timestamps.push(*timestamp);
-            if change >= 0.0 {
-                gains.push(change);
-                losses.push(0.0);
-            } else {
-                gains.push(0.0);
-                losses.push(-change);
-            }
-        }
-        prev_close = Some(candle.close);
-    }
-
-    // RSI 계산
-    for i in period..timestamps.len() {
-        let avg_gain: f32 = gains[i - period..i].iter().sum::<f32>() / period as f32;
-        let avg_loss: f32 = losses[i - period..i].iter().sum::<f32>() / period as f32;
-
-        let rs = if avg_loss == 0.0 {
-            100.0
-        } else {
-            avg_gain / avg_loss
-        };
-
-        let rsi = 100.0 - (100.0 / (1.0 + rs));
-        rsi_values.insert(timestamps[i], rsi);
-    }
-
-    rsi_values
-}
+/*===============CONNECTION LINE================= */
 fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
         let (tx, mut rx) = mpsc::channel(100);
@@ -1076,136 +387,44 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
         }
     }
 }
-// 새로운 구조체 추가
-#[derive(Debug, Deserialize, Clone)]
-struct PnLInfo {
-    symbol: String,
-    #[serde(rename = "unrealizedProfit")]
-    unrealized_profit: String,
-    #[serde(rename = "entryPrice")]
-    entry_price: String,
-    #[serde(rename = "markPrice")]
-    mark_price: String,
-    #[serde(rename = "positionAmt")]
-    position_amt: String,
-}
-
-impl RTarde {
-    async fn fetch_pnl(
-        api_key: &str,
-        api_secret: &str,
-        symbol: &str,
-    ) -> Result<f64, Box<dyn std::error::Error>> {
-        let client = reqwest::Client::new();
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let query = format!("symbol={}USDT&timestamp={}", symbol, timestamp);
-        let signature = hmac_sha256(api_secret, &query);
-
-        let url = format!(
-            "https://api.binance.com/api/v3/ticker/24hr?{}&signature={}",
-            query, signature
-        );
-
-        let response = client
-            .get(&url)
-            .header("X-MBX-APIKEY", api_key)
-            .send()
-            .await?;
-
-        #[derive(Deserialize)]
-        struct Ticker24h {
-            #[serde(rename = "priceChange")]
-            price_change: String,
+/*===============RTarde LINE================= */
+impl Default for RTarde {
+    fn default() -> Self {
+        let mut coin_list = HashMap::new();
+        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT"] {
+            coin_list.insert(
+                symbol.to_string(),
+                CoinInfo {
+                    symbol: format!("USDT-{}", symbol),
+                    name: symbol.to_string(),
+                    price: 0.0,
+                },
+            );
         }
-
-        let ticker = response.json::<Ticker24h>().await?;
-        Ok(ticker.price_change.parse::<f64>().unwrap_or(0.0))
+        Self {
+            candlesticks: fetch_candles("USDT-BTC", &CandleType::Day, None).unwrap_or_default(),
+            selected_coin: "BTC".to_string(),
+            selected_candle_type: CandleType::Day,
+            coin_list,
+            auto_scroll: true,
+            ws_sender: None,
+            show_ma5: false,
+            show_ma10: false,
+            show_ma20: false,
+            show_ma200: false,
+            loading_more: false,
+            oldest_date: None,
+            knn_enabled: false,
+            knn_prediction: None,
+            knn_buy_signals: BTreeMap::new(),
+            knn_sell_signals: BTreeMap::new(),
+            account_info: None,
+            positions: Vec::new(),
+            total_pnl: 0.0, // 초기값 0.0으로 설정
+        }
     }
-    fn setup_data_fetch(&self) {
-        let api_key = self.api_key.clone();
-        let api_secret = self.api_secret.clone();
-
-        tokio::spawn(async move {
-            loop {
-                match Self::fetch_account_info(&api_key, &api_secret).await {
-                    Ok(info) => {
-                        // 계정 정보 업데이트 메시지 전송
-                        // subscription을 통해 Message::UpdateAccountInfo(info) 전송
-                    }
-                    Err(e) => {
-                        // 에러 메시지 전송
-                        // subscription을 통해 Message::FetchError(e.to_string()) 전송
-                    }
-                }
-
-                match Self::fetch_positions(&api_key, &api_secret).await {
-                    Ok(positions) => {
-                        // 포지션 정보 업데이트 메시지 전송
-                        // subscription을 통해 Message::UpdatePositions(positions) 전송
-                    }
-                    Err(e) => {
-                        // 에러 메시지 전송
-                        // subscription을 통해 Message::FetchError(e.to_string()) 전송
-                    }
-                }
-
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        });
-    }
-    async fn fetch_account_info(
-        api_key: &str,
-        api_secret: &str,
-    ) -> Result<AccountInfo, Box<dyn std::error::Error>> {
-        let client = reqwest::Client::new();
-        let timestamp = chrono::Utc::now().timestamp_millis();
-
-        // 서명 생성
-        let query = format!("timestamp={}", timestamp);
-        let signature = hmac_sha256(api_secret, &query);
-
-        let url = format!(
-            "https://api.binance.com/api/v3/account?{}&signature={}",
-            query, signature
-        );
-
-        let response = client
-            .get(&url)
-            .header("X-MBX-APIKEY", api_key)
-            .send()
-            .await?
-            .json::<AccountInfo>()
-            .await?;
-
-        Ok(response)
-    }
-
-    async fn fetch_positions(
-        api_key: &str,
-        api_secret: &str,
-    ) -> Result<Vec<Position>, Box<dyn std::error::Error>> {
-        let client = reqwest::Client::new();
-        let timestamp = chrono::Utc::now().timestamp_millis();
-
-        let query = format!("timestamp={}", timestamp);
-        let signature = hmac_sha256(api_secret, &query);
-
-        let url = format!(
-            "https://api.binance.com/api/v3/openOrders?{}&signature={}",
-            query, signature
-        );
-
-        let response = client
-            .get(&url)
-            .header("X-MBX-APIKEY", api_key)
-            .send()
-            .await?
-            .json::<Vec<Position>>()
-            .await?;
-
-        Ok(response)
-    }
-
+}
+impl RTarde {
     fn binance_account_subscription(&self) -> Subscription<Message> {
         Subscription::run(binance_account_connection)
     }
@@ -1420,17 +639,6 @@ impl RTarde {
                             .size(16),
                         ),
                     )
-                    // 포지션 수익/손실
-                    // .push(
-                    //     Row::new().spacing(10).push(Text::new("24h P/L:")).push(
-                    //         Text::new(match &self.account_info {
-                    //             Some(info) => format!("{} USDT", info.commission_rates.maker),
-                    //             None => "Loading...".to_string(),
-                    //         })
-                    //         .size(16),
-                    //     ),
-                    // )
-                    // 현재 선택된 코인의 잔고
                     .push(
                         Row::new()
                             .spacing(10)
@@ -1613,16 +821,6 @@ impl RTarde {
                     .unwrap_or_default()
                     .with_timezone(&chrono::Local);
 
-                println!("=== 강한 매도 신호 감지! ===");
-                println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
-                println!("코인: {}", self.selected_coin);
-                println!("가격: {:.2} USDT", price);
-                println!("신호 강도: {:.2}", strength);
-                println!("RSI: {:.2}", indicators.rsi);
-                println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
-                println!("거래량 비율: {:.2}", indicators.volume_ratio);
-                println!("========================");
-
                 // 나중에 여기에 실제 매도 로직 추가
             }
             Message::ToggleKNN => {
@@ -1645,9 +843,7 @@ impl RTarde {
             Message::UpdateKNNPrediction(prediction) => {
                 self.knn_prediction = prediction;
             }
-            Message::New => {
-                println!("{}", "새로운");
-            }
+
             Message::LoadMoreCandles => {
                 if !self.loading_more {
                     // 가장 오래된 캔들의 날짜를 찾아서 to 파라미터로 사용
@@ -1865,12 +1061,6 @@ impl RTarde {
                         close: trade_price,
                         volume: trade_volume,
                     });
-
-                // println!(
-                //     "Updated candlestick at {}: price={}, volume={}",
-                //     candle_timestamp, trade_price, trade_volume
-                // );
-
                 self.auto_scroll = true;
             }
             Message::RemoveCandlestick => {
@@ -1900,6 +1090,86 @@ impl RTarde {
             predictor.predict(&features)
         } else {
             None
+        }
+    }
+}
+/*===============CHART LINE================= */
+impl Chart {
+    fn new(
+        candlesticks: BTreeMap<u64, Candlestick>,
+        candle_type: CandleType,
+        show_ma5: bool,
+        show_ma10: bool,
+        show_ma20: bool,
+        show_ma200: bool,
+        knn_enabled: bool,
+        knn_prediction: Option<String>,
+        buy_signals: BTreeMap<u64, f32>,  // 타입 변경
+        sell_signals: BTreeMap<u64, f32>, // 타입 변경
+    ) -> Self {
+        let ma5_values = calculate_moving_average(&candlesticks, 5);
+        let ma10_values = calculate_moving_average(&candlesticks, 10);
+        let ma20_values = calculate_moving_average(&candlesticks, 20);
+        let ma200_values = calculate_moving_average(&candlesticks, 200);
+        let rsi_values = calculate_rsi(&candlesticks, 14);
+
+        let price_range = if candlesticks.is_empty() {
+            Some((0.0, 100.0))
+        } else {
+            let (min, max) = candlesticks.values().fold((f32::MAX, f32::MIN), |acc, c| {
+                (acc.0.min(c.low), acc.1.max(c.high))
+            });
+
+            let ma_min = [&ma5_values, &ma10_values, &ma20_values, &ma200_values]
+                .iter()
+                .filter(|ma| !ma.is_empty())
+                .flat_map(|ma| ma.values())
+                .fold(min, |acc, &x| acc.min(x));
+
+            let ma_max = [&ma5_values, &ma10_values, &ma20_values, &ma200_values]
+                .iter()
+                .filter(|ma| !ma.is_empty())
+                .flat_map(|ma| ma.values())
+                .fold(max, |acc, &x| acc.max(x));
+
+            let margin = (ma_max - ma_min) * 0.1;
+            Some((ma_min - margin, ma_max + margin))
+        };
+        let max_data_points = 1000; // 저장할 최대 데이터 수
+        let mut candlestick_deque: VecDeque<(u64, Candlestick)> =
+            VecDeque::with_capacity(max_data_points);
+
+        // 정렬된 데이터를 VecDeque에 추가
+        for (timestamp, candle) in candlesticks.into_iter() {
+            if candlestick_deque.len() >= max_data_points {
+                candlestick_deque.pop_front(); // 가장 오래된 데이터 제거
+            }
+            candlestick_deque.push_back((timestamp, candle));
+        }
+
+        Self {
+            candlesticks: candlestick_deque,
+            max_data_points,
+            state: ChartState {
+                auto_scroll: true,
+                ..ChartState::default()
+            },
+            price_range,
+            candle_type,
+            show_ma5,
+            show_ma10,
+            show_ma20,
+            show_ma200,
+            ma5_values,
+            ma10_values,
+            ma20_values,
+            ma200_values,
+            rsi_values,
+            show_rsi: true,
+            knn_enabled,
+            knn_prediction,
+            buy_signals,
+            sell_signals,
         }
     }
 }
@@ -2204,18 +1474,268 @@ impl<Message> Program<Message> for Chart {
         vec![frame.into_geometry()]
     }
 }
-
-fn main() -> iced::Result {
-    dotenv().ok();
-
-    // log4rs::init_file("config/log4rs.yml", Default::default()).unwrap();
-
-    iced::application("Candlestick Chart", RTarde::update, RTarde::view)
-        .subscription(RTarde::subscription)
-        .window_size(Size::new(1980., 1080.))
-        .run()
+impl CandleType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CandleType::Minute1 => "1Minute",
+            CandleType::Minute3 => "3Minute", // 표시 텍스트 변경
+            CandleType::Day => "Day",
+        }
+    }
 }
 
+impl std::fmt::Display for CandleType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CandleType::Minute1 => write!(f, "1Minute"),
+            CandleType::Minute3 => write!(f, "3Minute"), // 표시 텍스트 변경
+            CandleType::Day => write!(f, "Day"),
+        }
+    }
+}
+/*===============UTILS LINE================= */
+trait VecDequeExt<T: 'static> {
+    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)>;
+}
+
+impl<T: 'static> VecDequeExt<T> for VecDeque<(u64, T)> {
+    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)> {
+        self.iter().skip(range.start).take(range.end - range.start)
+    }
+}
+fn calculate_knn_signals(
+    candlesticks: &BTreeMap<u64, Candlestick>,
+    is_realtime: bool, // 실시간 여부 파라미터 추가
+) -> (BTreeMap<u64, f32>, BTreeMap<u64, f32>) {
+    let mut buy_signals = BTreeMap::new();
+    let mut sell_signals = BTreeMap::new();
+
+    let window_size = 20;
+    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
+
+    if data.len() < window_size {
+        return (buy_signals, sell_signals);
+    }
+
+    for i in window_size..data.len() {
+        let (timestamp, candle) = data[i];
+        let window = &data[i - window_size..i];
+
+        // 이동평균선 계산
+        let ma5: f32 = window
+            .iter()
+            .rev()
+            .take(5)
+            .map(|(_, c)| c.close)
+            .sum::<f32>()
+            / 5.0;
+        let ma20: f32 = window.iter().map(|(_, c)| c.close).sum::<f32>() / window_size as f32;
+
+        // RSI 계산
+        let price_changes: Vec<f32> = window
+            .windows(2)
+            .map(|w| {
+                let (_, prev) = w[0];
+                let (_, curr) = w[1];
+                curr.close - prev.close
+            })
+            .collect();
+
+        let (gains, losses): (Vec<f32>, Vec<f32>) = price_changes
+            .iter()
+            .map(|&change| {
+                if change > 0.0 {
+                    (change, 0.0)
+                } else {
+                    (0.0, -change)
+                }
+            })
+            .unzip();
+
+        let avg_gain = gains.iter().sum::<f32>() / gains.len() as f32;
+        let avg_loss = losses.iter().sum::<f32>() / losses.len() as f32;
+        let rs = if avg_loss == 0.0 {
+            100.0
+        } else {
+            avg_gain / avg_loss
+        };
+        let rsi = 100.0 - (100.0 / (1.0 + rs));
+
+        // 볼륨 분석
+        let avg_volume = window.iter().map(|(_, c)| c.volume).sum::<f32>() / window_size as f32;
+        let volume_ratio = candle.volume / avg_volume;
+
+        // 매수 신호 강도 계산
+        if (rsi < 35.0 && ma5 > ma20) || (ma5 > ma20 && volume_ratio > 1.5) {
+            let mut strength = 0.5;
+
+            if rsi < 35.0 {
+                strength += (35.0 - rsi) / 35.0 * 0.25;
+            }
+            if ma5 > ma20 {
+                let ma_diff = (ma5 - ma20) / ma20;
+                strength += ma_diff.min(0.25);
+            }
+            if volume_ratio > 1.5 {
+                strength += ((volume_ratio - 1.5) / 2.0).min(0.25);
+            }
+
+            let final_strength = strength.min(1.0);
+
+            if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
+                log_trade_signal(
+                    "매수", // 매수 신호
+                    candle.close as f64,
+                    final_strength,
+                    *timestamp,
+                    &TradeIndicators {
+                        rsi,
+                        ma5,
+                        ma20,
+                        volume_ratio,
+                    },
+                );
+            }
+
+            buy_signals.insert(*timestamp, final_strength);
+        }
+
+        // 매도 신호 강도 계산
+        if (rsi > 65.0 && ma5 < ma20) || (ma5 < ma20 && volume_ratio > 1.5) {
+            let mut strength = 0.5;
+
+            if rsi > 65.0 {
+                strength += (rsi - 65.0) / 35.0 * 0.25;
+            }
+            if ma5 < ma20 {
+                let ma_diff = (ma20 - ma5) / ma5;
+                strength += ma_diff.min(0.25);
+            }
+            if volume_ratio > 1.5 {
+                strength += ((volume_ratio - 1.5) / 2.0).min(0.25);
+            }
+
+            let final_strength = strength.min(1.0);
+
+            if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
+                log_trade_signal(
+                    "매도", // 매도 신호
+                    candle.close as f64,
+                    final_strength,
+                    *timestamp,
+                    &TradeIndicators {
+                        rsi,
+                        ma5,
+                        ma20,
+                        volume_ratio,
+                    },
+                );
+            }
+
+            sell_signals.insert(*timestamp, final_strength);
+        }
+    }
+
+    (buy_signals, sell_signals)
+}
+fn hmac_sha256(secret: &str, message: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(message.as_bytes());
+    let result = mac.finalize();
+    hex::encode(result.into_bytes())
+}
+
+fn log_trade_signal(
+    signal_type: &str,
+    price: f64,
+    strength: f32,
+    timestamp: u64,
+    indicators: &TradeIndicators,
+) {
+    println!("=== 강한 매도 신호 감지! ===");
+    // println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
+    // println!("코인: {}", self.selected_coin);
+    println!("가격: {:.2} USDT", price);
+    println!("신호 강도: {:.2}", strength);
+    println!("RSI: {:.2}", indicators.rsi);
+    println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
+    println!("거래량 비율: {:.2}", indicators.volume_ratio);
+    println!("========================");
+}
+fn calculate_moving_average(
+    candlesticks: &BTreeMap<u64, Candlestick>,
+    period: usize,
+) -> BTreeMap<u64, f32> {
+    let mut result = BTreeMap::new();
+    if period == 0 || candlesticks.is_empty() {
+        return result;
+    }
+
+    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
+
+    // 모든 캔들에 대해 이동평균 계산
+    for i in 0..data.len() {
+        if i >= period - 1 {
+            let sum: f32 = data[i + 1 - period..=i]
+                .iter()
+                .map(|(_, candle)| candle.close)
+                .sum();
+            let avg = sum / period as f32;
+            result.insert(*data[i].0, avg);
+        }
+    }
+
+    result
+}
+fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BTreeMap<u64, f32> {
+    let mut rsi_values = BTreeMap::new();
+    if candlesticks.len() < period + 1 {
+        return rsi_values;
+    }
+
+    let mut gains = Vec::new();
+    let mut losses = Vec::new();
+    let mut prev_close = None;
+    let mut timestamps = Vec::new();
+
+    // 가격 변화 계산
+    for (timestamp, candle) in candlesticks.iter() {
+        if let Some(prev) = prev_close {
+            let change = candle.close - prev;
+            timestamps.push(*timestamp);
+            if change >= 0.0 {
+                gains.push(change);
+                losses.push(0.0);
+            } else {
+                gains.push(0.0);
+                losses.push(-change);
+            }
+        }
+        prev_close = Some(candle.close);
+    }
+
+    // RSI 계산
+    for i in period..timestamps.len() {
+        let avg_gain: f32 = gains[i - period..i].iter().sum::<f32>() / period as f32;
+        let avg_loss: f32 = losses[i - period..i].iter().sum::<f32>() / period as f32;
+
+        let rs = if avg_loss == 0.0 {
+            100.0
+        } else {
+            avg_gain / avg_loss
+        };
+
+        let rsi = 100.0 - (100.0 / (1.0 + rs));
+        rsi_values.insert(timestamps[i], rsi);
+    }
+
+    rsi_values
+}
 async fn fetch_candles_async(
     market: &str,
     candle_type: &CandleType,
@@ -2243,9 +1763,6 @@ async fn fetch_candles_async(
         "https://api.binance.com/api/v3/klines?symbol={}&interval={}&limit={}",
         binance_symbol, interval, count
     );
-
-    // println!("Requesting URL: {}", url);
-    // println!("데이터를 가져오는 중... 요청된 캔들 수: {}", count);
 
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await?;
@@ -2293,9 +1810,143 @@ fn fetch_candles(
     to_date: Option<String>, // 추가
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    // println!("Fetching {:?} candles for market: {}", candle_type, market);
-    if let Some(date) = &to_date {
-        // println!("From date: {}", date);
-    }
     rt.block_on(fetch_candles_async(market, candle_type, to_date))
+}
+
+impl OptimizedKNNPredictor {
+    fn new(k: usize, window_size: usize, buffer_size: usize) -> Self {
+        Self {
+            k,
+            window_size,
+            features_buffer: VecDeque::with_capacity(buffer_size),
+            labels_buffer: VecDeque::with_capacity(buffer_size),
+            buffer_size,
+        }
+    }
+
+    // 특성 추출 최적화
+    fn extract_features(&self, candlesticks: &[(&u64, &Candlestick)]) -> Option<Vec<f32>> {
+        if candlesticks.len() < self.window_size {
+            return None;
+        }
+
+        let mut features = Vec::with_capacity(self.window_size * 4);
+
+        // 가격 변화율 계산
+        let mut price_changes = Vec::with_capacity(self.window_size - 1);
+        for window in candlesticks.windows(2) {
+            let price_change =
+                ((window[1].1.close - window[0].1.close) / window[0].1.close) * 100.0;
+            price_changes.push(price_change);
+        }
+
+        // 기술적 지표 계산
+        let (ma5, ma20) = self.calculate_moving_averages(candlesticks);
+        let rsi = self.calculate_rsi(&price_changes, 14);
+        let volume_ratio = self.calculate_volume_ratio(candlesticks);
+
+        // 특성 결합
+        features.extend_from_slice(&[
+            ma5 / ma20 - 1.0,                             // MA 비율
+            rsi / 100.0,                                  // 정규화된 RSI
+            volume_ratio,                                 // 거래량 비율
+            price_changes.last().unwrap_or(&0.0) / 100.0, // 최근 가격 변화
+        ]);
+
+        Some(features)
+    }
+
+    // 이동평균 계산 최적화
+    fn calculate_moving_averages(&self, data: &[(&u64, &Candlestick)]) -> (f32, f32) {
+        let (ma5, ma20) = data
+            .iter()
+            .rev()
+            .take(20)
+            .fold((0.0, 0.0), |acc, (_, candle)| {
+                (
+                    if data.len() >= 5 {
+                        acc.0 + candle.close / 5.0
+                    } else {
+                        acc.0
+                    },
+                    acc.1 + candle.close / 20.0,
+                )
+            });
+        (ma5, ma20)
+    }
+
+    // RSI 계산 최적화
+    fn calculate_rsi(&self, price_changes: &[f32], period: usize) -> f32 {
+        let (gains, losses): (Vec<_>, Vec<_>) = price_changes
+            .iter()
+            .map(|&change| {
+                if change > 0.0 {
+                    (change, 0.0)
+                } else {
+                    (0.0, -change)
+                }
+            })
+            .unzip();
+
+        let avg_gain: f32 = gains.iter().sum::<f32>() / period as f32;
+        let avg_loss: f32 = losses.iter().sum::<f32>() / period as f32;
+
+        if avg_loss == 0.0 {
+            100.0
+        } else {
+            100.0 - (100.0 / (1.0 + (avg_gain / avg_loss)))
+        }
+    }
+
+    // 거래량 비율 계산
+    fn calculate_volume_ratio(&self, data: &[(&u64, &Candlestick)]) -> f32 {
+        let recent_volume = data.last().map(|(_, c)| c.volume).unwrap_or(0.0);
+        let avg_volume = data.iter().map(|(_, c)| c.volume).sum::<f32>() / data.len() as f32;
+        recent_volume / avg_volume
+    }
+
+    // 예측 최적화
+    fn predict(&self, features: &[f32]) -> Option<String> {
+        if self.features_buffer.is_empty() {
+            return None;
+        }
+
+        let mut distances: Vec<(f32, bool)> = self
+            .features_buffer
+            .iter()
+            .zip(self.labels_buffer.iter())
+            .map(|(train_features, &label)| {
+                let distance = self.euclidean_distance(features, train_features);
+                (distance, label)
+            })
+            .collect();
+
+        distances.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        let up_votes = distances
+            .iter()
+            .take(self.k)
+            .filter(|&&(_, label)| label)
+            .count();
+
+        Some(if up_votes > self.k / 2 { "▲" } else { "▼" }.to_string())
+    }
+
+    // 거리 계산 최적화
+    fn euclidean_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+}
+
+fn main() -> iced::Result {
+    dotenv().ok();
+
+    iced::application("Candlestick Chart", RTarde::update, RTarde::view)
+        .subscription(RTarde::subscription)
+        .window_size(Size::new(1980., 1080.))
+        .run()
 }

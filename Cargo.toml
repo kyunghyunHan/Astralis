@@ -17,8 +17,6 @@ serde = { version = "1.0.210", features = ["derive"] }
 rand = "0.8.5"
 iced_futures = "0.13.2"
 async-stream = "0.3"
-log4rs = "1.3.0"
-log = "0.4.22"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
