@@ -48,6 +48,21 @@ struct RTarde {
     account_info: Option<AccountInfo>,
     positions: Vec<Position>,
     total_pnl: f64,
+    alerts: VecDeque<Alert>,
+    alert_timeout: Option<Instant>,
+}
+#[derive(Debug, Clone)]
+struct Alert {
+    message: String,
+    alert_type: AlertType,
+    timestamp: Instant,
+}
+#[derive(Debug, Clone)]
+enum AlertType {
+    Buy,   // 매수 신호
+    Sell,  // 매도 신호
+    Info,  // 일반 정보
+    Error, // 에러
 }
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -65,9 +80,8 @@ pub enum Message {
     ToggleMA200,
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
-
-    ToggleKNN,                           // KNN 시스템 켜기/끄기
-    UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
+    ToggleKNN,                                     // KNN 시스템 켜기/끄기
+    UpdateKNNPrediction(Option<String>),           // 예측 결과 업데이트
     TryBuy {
         price: f64,
         strength: f32,
@@ -83,7 +97,9 @@ pub enum Message {
     UpdateAccountInfo(AccountInfo),
     UpdatePositions(Vec<Position>),
     FetchError(String),
-    UpdatePnL(f64),
+    AddAlert(String, AlertType),
+    RemoveAlert,
+    Tick, // 알림 타이머용
 }
 struct Chart {
     candlesticks: VecDeque<(u64, Candlestick)>, // BTreeMap에서 VecDeque로 변경
@@ -421,7 +437,10 @@ impl Default for RTarde {
             knn_sell_signals: BTreeMap::new(),
             account_info: None,
             positions: Vec::new(),
-            total_pnl: 0.0, // 초기값 0.0으로 설정
+            total_pnl: 0.0,
+            // 알림 시스템 관련 필드 추가
+            alerts: VecDeque::with_capacity(5), // 최대 5개의 알림을 저장할 수 있는 큐
+            alert_timeout: None,
         }
     }
 }
@@ -435,6 +454,7 @@ impl RTarde {
             // 기존 웹소켓 subscription
             self.websocket_subscription(),
             self.binance_account_subscription(),
+            iced::time::every(std::time::Duration::from_millis(100)).map(|_| Message::Tick),
         ])
     }
     fn websocket_subscription(&self) -> Subscription<Message> {
@@ -468,24 +488,21 @@ impl RTarde {
                 ),
         )
         .padding(10);
-        let prediction_display = if self.knn_enabled {
-            if let Some(pred) = &self.knn_prediction {
-                Container::new(
-                    Text::new(format!("KNN prediction: {}", pred))
-                        .size(20)
-                        .color(if pred == "rising" {
-                            iced::Color::from_rgb(0.0, 0.8, 0.0) // 초록색
-                        } else {
-                            iced::Color::from_rgb(0.8, 0.0, 0.0) // 빨간색
-                        }),
-                )
-                .padding(10)
+        let prediction_display = Container::new(Column::new().push(
+            if let Some(alert) = self.alerts.front() {
+                Text::new(&alert.message).color(match alert.alert_type {
+                    AlertType::Buy => Color::from_rgb(0.0, 0.8, 0.0), // 초록색
+                    AlertType::Sell => Color::from_rgb(0.8, 0.0, 0.0), // 빨간색
+                    AlertType::Info => Color::from_rgb(0.0, 0.0, 0.8), // 파란색
+                    AlertType::Error => Color::from_rgb(0.8, 0.0, 0.0), // 빨간색
+                })
             } else {
-                Container::new(Text::new("Preparing prediction...").size(20)).padding(10)
-            }
-        } else {
-            Container::new(Space::new(Length::Fill, Length::Shrink))
-        };
+                Text::new("") // 알림이 없을 경우 빈 텍스트
+            },
+        ))
+        .padding(10)
+        .width(Length::Shrink)
+        .height(Length::Shrink);
 
         let coins: Vec<String> = self.coin_list.keys().cloned().collect();
 
@@ -615,10 +632,10 @@ impl RTarde {
             .padding(20)
             .push(current_coin_info);
         //오른쪽 사이드 바
+
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
-            // 계정 정보 섹션
             .push(
                 Column::new()
                     .spacing(10)
@@ -756,13 +773,14 @@ impl RTarde {
             ));
 
         //메인
+
         Column::new()
             // .spacing(20)
             .push(
                 Row::new()
                     .push(coin_picker.width(FillPortion(1)))
                     .push(candle_type_picker.width(FillPortion(1)))
-                    .push(ma_controls.width(FillPortion(10)))
+                    .push(ma_controls.width(FillPortion(8)))
                     .push(prediction_display.width(FillPortion(2))),
             )
             .push(
@@ -776,11 +794,7 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::UpdatePnL(pnl) => {
-                self.total_pnl = pnl;
-            }
             Message::UpdateAccountInfo(info) => {
-                println!("{:?}", info);
                 self.account_info = Some(info);
             }
             Message::UpdatePositions(positions) => {
@@ -808,10 +822,37 @@ impl RTarde {
                 println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
                 println!("거래량 비율: {:.2}", indicators.volume_ratio);
                 println!("========================");
-
+                self.add_alert(
+                    format!(
+                        "매수 신호 감지!\n가격: {:.2} USDT\n강도: {:.2}\nRSI: {:.2}",
+                        price, strength, indicators.rsi
+                    ),
+                    AlertType::Buy,
+                );
                 // 나중에 여기에 실제 매수 로직 추가
             }
+            Message::AddAlert(message, alert_type) => {
+                self.alerts.push_back(Alert {
+                    message,
+                    alert_type,
+                    timestamp: Instant::now(),
+                });
+            }
 
+            Message::RemoveAlert => {
+                self.alerts.pop_front();
+            }
+
+            Message::Tick => {
+                // 5초 이상 된 알림 제거
+                while let Some(alert) = self.alerts.front() {
+                    if alert.timestamp.elapsed() > Duration::from_secs(5) {
+                        self.alerts.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
             Message::TrySell {
                 price,
                 strength,
@@ -889,6 +930,7 @@ impl RTarde {
             Message::ToggleMA20 => self.show_ma20 = !self.show_ma20,
             Message::ToggleMA200 => self.show_ma200 = !self.show_ma200,
             Message::SelectCandleType(candle_type) => {
+                self.add_alert(format!("1"), AlertType::Buy);
                 println!("Changing candle type to: {}", candle_type);
                 self.selected_candle_type = candle_type.clone();
 
@@ -1091,6 +1133,19 @@ impl RTarde {
             predictor.predict(&features)
         } else {
             None
+        }
+    }
+
+    fn add_alert(&mut self, message: String, alert_type: AlertType) {
+        self.alerts.push_back(Alert {
+            message,
+            alert_type,
+            timestamp: Instant::now(),
+        });
+
+        // 최대 5개까지만 유지
+        while self.alerts.len() > 5 {
+            self.alerts.pop_front();
         }
     }
 }
