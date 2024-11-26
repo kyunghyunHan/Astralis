@@ -65,8 +65,9 @@ pub enum Message {
     ToggleMA200,
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
-    ToggleKNN,                                     // KNN 시스템 켜기/끄기
-    UpdateKNNPrediction(Option<String>),           // 예측 결과 업데이트
+
+    ToggleKNN,                           // KNN 시스템 켜기/끄기
+    UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
     TryBuy {
         price: f64,
         strength: f32,
