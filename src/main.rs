@@ -456,7 +456,6 @@ impl Default for RTarde {
             knn_sell_signals: BTreeMap::new(),
             account_info: None,
             positions: Vec::new(),
-            // 알림 시스템 관련 필드 추가
             alerts: VecDeque::with_capacity(5), // 최대 5개의 알림을 저장할 수 있는 큐
             alert_timeout: None,
             auto_trading_enabled: false,
@@ -654,26 +653,36 @@ impl RTarde {
             .padding(20)
             .push(current_coin_info);
         //오른쪽 사이드 바
-        let auto_trading_button = Container::new(
-            Column::new()
+
+        let auto_trading_toggle = Container::new(
+            Row::new()
                 .spacing(10)
-                .push(Text::new("Auto trading").size(16))
+                // .align_items(Alignment::Center) // 세로 중앙 정렬
                 .push(
-                    button(Text::new(if self.auto_trading_enabled {
+                    checkbox("Auto trading", self.auto_trading_enabled)
+                        .on_toggle(|_| Message::ToggleAutoTrading),
+                )
+                .push(
+                    Text::new(if self.auto_trading_enabled {
                         "Auto trading on"
                     } else {
                         "Auto trading off"
-                    }))
-                    .on_press(Message::ToggleAutoTrading)
-                    .width(Length::Fill),
+                    })
+                    .size(14)
+                    .color(if self.auto_trading_enabled {
+                        Color::from_rgb(0.0, 0.8, 0.0) // 초록색
+                    } else {
+                        Color::from_rgb(0.5, 0.5, 0.5) // 회색
+                    }),
                 ),
         )
         .padding(10)
         .width(Length::Fill);
+
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
-            .push(auto_trading_button)
+            .push(auto_trading_toggle)
             .push(
                 Column::new()
                     .spacing(10)
