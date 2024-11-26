@@ -392,7 +392,7 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
 impl Default for RTarde {
     fn default() -> Self {
         let mut coin_list = HashMap::new();
-        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT"] {
+        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT", "TRX"] {
             coin_list.insert(
                 symbol.to_string(),
                 CoinInfo {
@@ -1345,7 +1345,194 @@ impl<Message> Program<Message> for Chart {
             .take(candles_per_screen)
             .map(|(ts, candle)| (*ts, candle))
             .collect();
+        // visible_candlesticks 그리기 이후에 다음 코드 추가
 
+        // 이동평균선 그리기
+        if self.show_ma5 {
+            let ma_points: Vec<Point> = visible_candlesticks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (ts, _))| {
+                    self.ma5_values.get(ts).map(|&ma| {
+                        Point::new(
+                            left_margin
+                                + (i as f32 * base_candle_width)
+                                + initial_offset
+                                + state.offset,
+                            top_margin + ((max_price - ma) * y_scale),
+                        )
+                    })
+                })
+                .collect();
+
+            if ma_points.len() >= 2 {
+                frame.stroke(
+                    &canvas::Path::new(|p| {
+                        p.move_to(ma_points[0]);
+                        for point in ma_points.iter().skip(1) {
+                            p.line_to(*point);
+                        }
+                    }),
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(1.0, 0.647, 0.0)) // 주황색
+                        .with_width(1.0),
+                );
+            }
+        }
+
+        if self.show_ma10 {
+            let ma_points: Vec<Point> = visible_candlesticks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (ts, _))| {
+                    self.ma10_values.get(ts).map(|&ma| {
+                        Point::new(
+                            left_margin
+                                + (i as f32 * base_candle_width)
+                                + initial_offset
+                                + state.offset,
+                            top_margin + ((max_price - ma) * y_scale),
+                        )
+                    })
+                })
+                .collect();
+
+            if ma_points.len() >= 2 {
+                frame.stroke(
+                    &canvas::Path::new(|p| {
+                        p.move_to(ma_points[0]);
+                        for point in ma_points.iter().skip(1) {
+                            p.line_to(*point);
+                        }
+                    }),
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(1.0, 1.0, 0.0)) // 노란색
+                        .with_width(1.0),
+                );
+            }
+        }
+
+        if self.show_ma20 {
+            let ma_points: Vec<Point> = visible_candlesticks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (ts, _))| {
+                    self.ma20_values.get(ts).map(|&ma| {
+                        Point::new(
+                            left_margin
+                                + (i as f32 * base_candle_width)
+                                + initial_offset
+                                + state.offset,
+                            top_margin + ((max_price - ma) * y_scale),
+                        )
+                    })
+                })
+                .collect();
+
+            if ma_points.len() >= 2 {
+                frame.stroke(
+                    &canvas::Path::new(|p| {
+                        p.move_to(ma_points[0]);
+                        for point in ma_points.iter().skip(1) {
+                            p.line_to(*point);
+                        }
+                    }),
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(1.0, 0.0, 0.0)) // 빨간색
+                        .with_width(1.0),
+                );
+            }
+        }
+
+        if self.show_ma200 {
+            let ma_points: Vec<Point> = visible_candlesticks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (ts, _))| {
+                    self.ma200_values.get(ts).map(|&ma| {
+                        Point::new(
+                            left_margin
+                                + (i as f32 * base_candle_width)
+                                + initial_offset
+                                + state.offset,
+                            top_margin + ((max_price - ma) * y_scale),
+                        )
+                    })
+                })
+                .collect();
+
+            if ma_points.len() >= 2 {
+                frame.stroke(
+                    &canvas::Path::new(|p| {
+                        p.move_to(ma_points[0]);
+                        for point in ma_points.iter().skip(1) {
+                            p.line_to(*point);
+                        }
+                    }),
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(0.0, 0.0, 1.0)) // 파란색
+                        .with_width(1.0),
+                );
+            }
+        }
+
+        // RSI 그리기
+        if self.show_rsi {
+            // RSI 영역 그리드 라인
+            for i in 0..=4 {
+                let y = rsi_area_start + (rsi_area_height * (i as f32 / 4.0));
+                let rsi_value = 100.0 - (100.0 * (i as f32 / 4.0));
+
+                frame.stroke(
+                    &canvas::Path::new(|p| {
+                        p.move_to(Point::new(left_margin, y));
+                        p.line_to(Point::new(bounds.width - right_margin, y));
+                    }),
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(0.2, 0.2, 0.25))
+                        .with_width(1.0),
+                );
+
+                frame.fill_text(canvas::Text {
+                    content: format!("RSI {:.0}", rsi_value),
+                    position: Point::new(5.0, y - 5.0),
+                    color: Color::from_rgb(0.7, 0.7, 0.7),
+                    size: Pixels(10.0),
+                    ..canvas::Text::default()
+                });
+            }
+
+            // RSI 선 그리기
+            let rsi_points: Vec<Point> = visible_candlesticks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (ts, _))| {
+                    self.rsi_values.get(ts).map(|&rsi| {
+                        Point::new(
+                            left_margin
+                                + (i as f32 * base_candle_width)
+                                + initial_offset
+                                + state.offset,
+                            rsi_area_start + (rsi_area_height * (1.0 - rsi / 100.0)),
+                        )
+                    })
+                })
+                .collect();
+
+            if rsi_points.len() >= 2 {
+                frame.stroke(
+                    &canvas::Path::new(|p| {
+                        p.move_to(rsi_points[0]);
+                        for point in rsi_points.iter().skip(1) {
+                            p.line_to(*point);
+                        }
+                    }),
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(0.0, 0.8, 0.8)) // 청록색
+                        .with_width(1.0),
+                );
+            }
+        }
         // 캔들스틱과 거래량 바 그리기
         for (i, (ts, candlestick)) in visible_candlesticks.iter().enumerate() {
             let x = left_margin + (i as f32 * base_candle_width) + initial_offset + state.offset;
