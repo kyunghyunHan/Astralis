@@ -1,4 +1,5 @@
 #![allow(non_utf8_strings)]
+use dotenv::dotenv;
 use futures_util::Stream;
 use iced::futures::{channel::mpsc, SinkExt, StreamExt};
 use iced::time::{self, Duration, Instant};
@@ -18,10 +19,10 @@ use iced::{
     Color, Element, Font, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
 };
 use log::{debug, error, info, trace, warn};
-
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::env;
 
 use async_stream::stream;
 use reqwest::Url;
@@ -41,11 +42,42 @@ struct CoinInfo {
 // 계정 정보를 위한 구조체들
 #[derive(Debug, Deserialize, Clone)]
 struct AccountInfo {
+    #[serde(rename = "makerCommission")]
+    maker_commission: i32,
+    #[serde(rename = "takerCommission")]
+    taker_commission: i32,
+    #[serde(rename = "buyerCommission")]
+    buyer_commission: i32,
+    #[serde(rename = "sellerCommission")]
+    seller_commission: i32,
+    #[serde(rename = "commissionRates")]
+    commission_rates: CommissionRates,
+    #[serde(rename = "canTrade")]
+    can_trade: bool,
+    #[serde(rename = "canWithdraw")]
+    can_withdraw: bool,
+    #[serde(rename = "canDeposit")]
+    can_deposit: bool,
+    brokered: bool,
+    #[serde(rename = "requireSelfTradePrevention")]
+    require_self_trade_prevention: bool,
+    #[serde(rename = "preventSor")]
+    prevent_sor: bool,
+    #[serde(rename = "updateTime")]
+    update_time: i64,
+    #[serde(rename = "accountType")]
+    account_type: String,
     balances: Vec<Balance>,
-    #[serde(rename = "totalWalletBalance")]
-    total_wallet_balance: String,
-    #[serde(rename = "totalUnrealizedProfit")]
-    total_unrealized_profit: String,
+    permissions: Vec<String>,
+    uid: i64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct CommissionRates {
+    maker: String,
+    taker: String,
+    buyer: String,
+    seller: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -117,6 +149,7 @@ pub enum Message {
     UpdateAccountInfo(AccountInfo),
     UpdatePositions(Vec<Position>),
     FetchError(String),
+    UpdatePnL(f64),
 }
 // 거래 지표 정보를 담는 구조체
 #[derive(Debug, Clone)]
@@ -296,6 +329,7 @@ struct RTarde {
     positions: Vec<Position>,
     api_key: String,
     api_secret: String,
+    total_pnl: f64,
 }
 
 // Candlestick 구조체 업데이트
@@ -661,6 +695,7 @@ impl Default for RTarde {
             positions: Vec::new(),
             api_key: String::from("your_api_key"),
             api_secret: String::from("your_api_secret"),
+            total_pnl: 0.0, // 초기값 0.0으로 설정
         }
     }
 }
@@ -832,44 +867,7 @@ fn log_trade_signal(
     timestamp: u64,
     indicators: &TradeIndicators,
 ) {
-    let dt = chrono::DateTime::from_timestamp((timestamp / 1000) as i64, 0)
-        .unwrap_or_default()
-        .with_timezone(&chrono::Local);
-
-    let log_message = format!(
-        "\n=== 강한 {} 신호 감지! ===\n\
-         시간: {}\n\
-         가격: {:.2} USDT\n\
-         신호 강도: {:.2}\n\
-         RSI: {:.2}\n\
-         MA5/MA20: {:.2}/{:.2}\n\
-         거래량 비율: {:.2}\n\
-         ========================",
-        signal_type,
-        dt.format("%Y-%m-%d %H:%M:%S"),
-        price,
-        strength,
-        indicators.rsi,
-        indicators.ma5,
-        indicators.ma20,
-        indicators.volume_ratio
-    );
-
-    // 콘솔과 파일에 모두 로깅
-    info!("{}", log_message);
-
-    // 추가적으로 거래 시그널의 강도에 따라 다른 레벨로 로깅할 수도 있습니다
-    if strength > 0.9 {
-        warn!("매우 강한 {} 신호! 강도: {:.2}", signal_type, strength);
-    }
-
-    // 에러 상황 발생시
-    if indicators.rsi.is_nan() || indicators.ma5.is_nan() || indicators.ma20.is_nan() {
-        error!(
-            "지표 계산 오류 발생! RSI: {}, MA5: {}, MA20: {}",
-            indicators.rsi, indicators.ma5, indicators.ma20
-        );
-    }
+    println!("{}", "강한 신호")
 }
 fn calculate_moving_average(
     candlesticks: &BTreeMap<u64, Candlestick>,
@@ -1011,14 +1009,34 @@ fn binance_connection() -> impl Stream<Item = Message> {
         }
     }
 }
+
 fn binance_account_connection() -> impl Stream<Item = Message> {
     stream! {
+        // 환경변수에서 API 키 읽기
+        let api_key = match env::var("BINANCE_API_KEY") {
+            Ok(key) => key,
+            Err(_) => {
+                println!("Error: BINANCE_API_KEY 환경변수가 설정되지 않았습니다");
+                yield Message::FetchError("API KEY not found".to_string());
+                return;
+            }
+        };
+
+        let api_secret = match env::var("BINANCE_API_SECRET") {
+            Ok(secret) => secret,
+            Err(_) => {
+                println!("Error: BINANCE_API_SECRET 환경변수가 설정되지 않았습니다");
+                yield Message::FetchError("API SECRET not found".to_string());
+                return;
+            }
+        };
+
         let client = reqwest::Client::new();
 
         loop {
             let timestamp = chrono::Utc::now().timestamp_millis();
             let query = format!("timestamp={}", timestamp);
-            let signature = hmac_sha256("your_secret", &query);
+            let signature = hmac_sha256(&api_secret, &query);
 
             // 계정 정보 가져오기
             let account_url = format!(
@@ -1028,7 +1046,7 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
 
             if let Ok(response) = client
                 .get(&account_url)
-                .header("X-MBX-APIKEY", "your_key")
+                .header("X-MBX-APIKEY", &api_key)
                 .send()
                 .await
             {
@@ -1045,7 +1063,7 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
 
             if let Ok(response) = client
                 .get(&positions_url)
-                .header("X-MBX-APIKEY", "your_key")
+                .header("X-MBX-APIKEY", &api_key)
                 .send()
                 .await
             {
@@ -1058,7 +1076,51 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
         }
     }
 }
+// 새로운 구조체 추가
+#[derive(Debug, Deserialize, Clone)]
+struct PnLInfo {
+    symbol: String,
+    #[serde(rename = "unrealizedProfit")]
+    unrealized_profit: String,
+    #[serde(rename = "entryPrice")]
+    entry_price: String,
+    #[serde(rename = "markPrice")]
+    mark_price: String,
+    #[serde(rename = "positionAmt")]
+    position_amt: String,
+}
+
 impl RTarde {
+    async fn fetch_pnl(
+        api_key: &str,
+        api_secret: &str,
+        symbol: &str,
+    ) -> Result<f64, Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let query = format!("symbol={}USDT&timestamp={}", symbol, timestamp);
+        let signature = hmac_sha256(api_secret, &query);
+
+        let url = format!(
+            "https://api.binance.com/api/v3/ticker/24hr?{}&signature={}",
+            query, signature
+        );
+
+        let response = client
+            .get(&url)
+            .header("X-MBX-APIKEY", api_key)
+            .send()
+            .await?;
+
+        #[derive(Deserialize)]
+        struct Ticker24h {
+            #[serde(rename = "priceChange")]
+            price_change: String,
+        }
+
+        let ticker = response.json::<Ticker24h>().await?;
+        Ok(ticker.price_change.parse::<f64>().unwrap_or(0.0))
+    }
     fn setup_data_fetch(&self) {
         let api_key = self.api_key.clone();
         let api_secret = self.api_secret.clone();
@@ -1266,22 +1328,31 @@ impl RTarde {
                     .width(Length::Fill),
                 )
                 .push(
-                    // 24시간 거래량 등 추가 정보를 위한 공간
                     Container::new(
                         Column::new()
                             .spacing(8)
                             .push(
-                                Row::new()
-                                    .spacing(5)
-                                    .push(
-                                        Text::new("24H HIGH")
-                                            .size(14)
-                                            .color(Color::from_rgb(0.5, 0.5, 0.5)),
-                                    )
-                                    .push(
-                                        Text::new(format!("{:.0} USDT", info.price * 1.1)) // 예시 데이터
-                                            .size(14),
-                                    ),
+                                Row::new().spacing(10).push(Text::new("24h P/L:")).push(
+                                    Text::new(match &self.account_info {
+                                        Some(info) => {
+                                            // USDT 잔고 찾기
+                                            let usdt_balance = info
+                                                .balances
+                                                .iter()
+                                                .find(|b| b.asset == "USDT")
+                                                .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
+                                                .unwrap_or(0.0);
+
+                                            if usdt_balance == 0.0 {
+                                                "0.00 USDT".to_string()
+                                            } else {
+                                                format!("{:.2} USDT", usdt_balance)
+                                            }
+                                        }
+                                        None => "0.00 USDT".to_string(),
+                                    })
+                                    .size(16), // .style(|_| TextColor::Gray),
+                                ),
                             )
                             .push(
                                 Row::new()
@@ -1292,8 +1363,7 @@ impl RTarde {
                                             .color(Color::from_rgb(0.5, 0.5, 0.5)),
                                     )
                                     .push(
-                                        Text::new(format!("{:.0} USDT", info.price * 0.9)) // 예시 데이터
-                                            .size(14),
+                                        Text::new(format!("{:.0} USDT", info.price * 0.9)).size(14),
                                     ),
                             ),
                     )
@@ -1328,27 +1398,55 @@ impl RTarde {
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
+            // 계정 정보 섹션
             .push(
                 Column::new()
                     .spacing(10)
                     .push(Text::new("Account Info").size(24))
                     .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(Text::new("Total:"))
-                            .push(Text::new("125,430.50 USDT").size(16)),
+                        Row::new().spacing(10).push(Text::new("Total:")).push(
+                            Text::new(match &self.account_info {
+                                Some(info) => {
+                                    let usdt_balance = info
+                                        .balances
+                                        .iter()
+                                        .find(|b| b.asset == "USDT")
+                                        .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
+                                        .unwrap_or(0.0);
+                                    format!("{:.2} USDT", usdt_balance)
+                                }
+                                None => "Loading...".to_string(),
+                            })
+                            .size(16),
+                        ),
                     )
+                    // 포지션 수익/손실
+                    // .push(
+                    //     Row::new().spacing(10).push(Text::new("24h P/L:")).push(
+                    //         Text::new(match &self.account_info {
+                    //             Some(info) => format!("{} USDT", info.commission_rates.maker),
+                    //             None => "Loading...".to_string(),
+                    //         })
+                    //         .size(16),
+                    //     ),
+                    // )
+                    // 현재 선택된 코인의 잔고
                     .push(
                         Row::new()
                             .spacing(10)
-                            .push(Text::new("24h P/L:"))
-                            .push(Text::new("+2,145.30 USDT").size(16)),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(Text::new("BTC:"))
-                            .push(Text::new("0.85 ($34,250)")),
+                            .push(Text::new(&self.selected_coin))
+                            .push(Text::new(match &self.account_info {
+                                Some(info) => {
+                                    let balance = info
+                                        .balances
+                                        .iter()
+                                        .find(|b| b.asset == self.selected_coin)
+                                        .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
+                                        .unwrap_or(0.0);
+                                    format!("{:.8}", balance)
+                                }
+                                None => "Loading...".to_string(),
+                            })),
                     ),
             )
             .push(
@@ -1363,16 +1461,8 @@ impl RTarde {
                     .push(
                         Row::new()
                             .spacing(10)
-                            .push(
-                                button(Text::new("buy at market price"))
-                                    // .style(iced::theme::Button::Primary)
-                                    .width(Length::Fill),
-                            )
-                            .push(
-                                button(Text::new("sell at market price"))
-                                    // .style(iced::theme::Button::Secondary)
-                                    .width(Length::Fill),
-                            ),
+                            .push(button(Text::new("buy at market price")).width(Length::Fill))
+                            .push(button(Text::new("sell at market price")).width(Length::Fill)),
                     ),
             )
             .push(
@@ -1383,7 +1473,7 @@ impl RTarde {
                         Row::new()
                             .spacing(10)
                             .push(text_input("Enter price...", ""))
-                            .push(Text::new("USDU")),
+                            .push(Text::new("USDT")),
                     )
                     .push(
                         Row::new()
@@ -1394,16 +1484,8 @@ impl RTarde {
                     .push(
                         Row::new()
                             .spacing(10)
-                            .push(
-                                button(Text::new("limit price purchase"))
-                                    // .style(iced::theme::Button::Primary)
-                                    .width(Length::Fill),
-                            )
-                            .push(
-                                button(Text::new("limit price sale"))
-                                    // .style(iced::theme::Button::Secondary)
-                                    .width(Length::Fill),
-                            ),
+                            .push(button(Text::new("limit price purchase")).width(Length::Fill))
+                            .push(button(Text::new("limit price sale")).width(Length::Fill)),
                     ),
             )
             .push(
@@ -1420,25 +1502,49 @@ impl RTarde {
                     ),
             )
             .push(Space::with_height(Length::Fill))
-            .push(
-                Container::new(
-                    Column::new()
-                        .spacing(10)
-                        .push(Text::new("assets held").size(16))
-                        .push(
-                            Row::new()
-                                .spacing(10)
-                                .push(Text::new("USDT"))
-                                .push(Text::new("1,000,000").size(16)),
-                        )
-                        .push(
-                            Row::new()
-                                .spacing(10)
-                                .push(Text::new(&self.selected_coin))
-                                .push(Text::new("0.0").size(16)),
+            // 자산 보유 현황
+            .push(Container::new(
+                Column::new()
+                    .spacing(10)
+                    .push(Text::new("assets held").size(16))
+                    .push(
+                        Row::new().spacing(10).push(Text::new("USDT")).push(
+                            Text::new(match &self.account_info {
+                                Some(info) => {
+                                    let usdt_balance = info
+                                        .balances
+                                        .iter()
+                                        .find(|b| b.asset == "USDT")
+                                        .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
+                                        .unwrap_or(0.0);
+                                    format!("{:.2}", usdt_balance)
+                                }
+                                None => "Loading...".to_string(),
+                            })
+                            .size(16),
                         ),
-                ), // .style(iced::theme::Container::Box),
-            );
+                    )
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(Text::new(&self.selected_coin))
+                            .push(
+                                Text::new(match &self.account_info {
+                                    Some(info) => {
+                                        let balance = info
+                                            .balances
+                                            .iter()
+                                            .find(|b| b.asset == self.selected_coin)
+                                            .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
+                                            .unwrap_or(0.0);
+                                        format!("{:.8}", balance)
+                                    }
+                                    None => "Loading...".to_string(),
+                                })
+                                .size(16),
+                            ),
+                    ),
+            ));
 
         //메인
         Column::new()
@@ -1461,7 +1567,11 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::UpdatePnL(pnl) => {
+                self.total_pnl = pnl;
+            }
             Message::UpdateAccountInfo(info) => {
+                println!("{:?}", info);
                 self.account_info = Some(info);
             }
             Message::UpdatePositions(positions) => {
@@ -2096,7 +2206,9 @@ impl<Message> Program<Message> for Chart {
 }
 
 fn main() -> iced::Result {
-    log4rs::init_file("config/log4rs.yml", Default::default()).unwrap();
+    dotenv().ok();
+
+    // log4rs::init_file("config/log4rs.yml", Default::default()).unwrap();
 
     iced::application("Candlestick Chart", RTarde::update, RTarde::view)
         .subscription(RTarde::subscription)

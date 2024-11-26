@@ -622,3 +622,419 @@
 }
 2024-11-25 13:15:10 UTC - WARN:failed to load font 'GB18030Bitmap'
 2024-11-25 13:15:10 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:47:05 UTC - INFO:Settings {
+    present_mode: AutoVsync,
+    backends: Backends(
+        VULKAN | GL | METAL | DX12 | BROWSER_WEBGPU,
+    ),
+    default_font: Font {
+        family: SansSerif,
+        weight: Normal,
+        stretch: Normal,
+        style: Normal,
+    },
+    default_text_size: Pixels(
+        16.0,
+    ),
+    antialiasing: None,
+}
+2024-11-26 00:47:05 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:47:05 UTC - INFO:Available adapters: [
+    AdapterInfo {
+        name: "Apple M1",
+        vendor: 0,
+        device: 0,
+        device_type: IntegratedGpu,
+        driver: "",
+        driver_info: "",
+        backend: Metal,
+    },
+]
+2024-11-26 00:47:05 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:47:05 UTC - INFO:Selected: AdapterInfo {
+    name: "Apple M1",
+    vendor: 0,
+    device: 0,
+    device_type: IntegratedGpu,
+    driver: "",
+    driver_info: "",
+    backend: Metal,
+}
+2024-11-26 00:47:05 UTC - INFO:Available formats: Copied {
+    it: Iter(
+        [
+            Bgra8UnormSrgb,
+            Bgra8Unorm,
+            Rgba16Float,
+            Rgb10a2Unorm,
+        ],
+    ),
+}
+2024-11-26 00:47:05 UTC - INFO:Available alpha modes: [
+    Opaque,
+    PostMultiplied,
+]
+2024-11-26 00:47:05 UTC - INFO:Selected format: Bgra8UnormSrgb with alpha mode: PostMultiplied
+2024-11-26 00:47:05 UTC - INFO:Window attributes for id `Id(
+    1,
+)`: WindowAttributes {
+    inner_size: Some(
+        Logical(
+            LogicalSize {
+                width: 1980.0,
+                height: 1080.0,
+            },
+        ),
+    ),
+    min_inner_size: None,
+    max_inner_size: None,
+    position: None,
+    resizable: true,
+    enabled_buttons: WindowButtons(
+        CLOSE | MINIMIZE | MAXIMIZE,
+    ),
+    title: "Candlestick Chart",
+    maximized: false,
+    visible: false,
+    transparent: false,
+    blur: false,
+    decorations: true,
+    window_icon: None,
+    preferred_theme: None,
+    resize_increments: None,
+    content_protected: false,
+    window_level: Normal,
+    active: true,
+    cursor: Icon(
+        Default,
+    ),
+    parent_window: None,
+    fullscreen: None,
+    platform_specific: PlatformSpecificWindowAttributes {
+        movable_by_window_background: false,
+        titlebar_transparent: false,
+        title_hidden: false,
+        titlebar_hidden: false,
+        titlebar_buttons_hidden: false,
+        fullsize_content_view: false,
+        disallow_hidpi: false,
+        has_shadow: true,
+        accepts_first_mouse: true,
+        tabbing_identifier: None,
+        option_as_alt: None,
+    },
+}
+2024-11-26 00:47:05 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:47:05 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:50:52 UTC - INFO:Settings {
+    present_mode: AutoVsync,
+    backends: Backends(
+        VULKAN | GL | METAL | DX12 | BROWSER_WEBGPU,
+    ),
+    default_font: Font {
+        family: SansSerif,
+        weight: Normal,
+        stretch: Normal,
+        style: Normal,
+    },
+    default_text_size: Pixels(
+        16.0,
+    ),
+    antialiasing: None,
+}
+2024-11-26 00:50:52 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:50:52 UTC - INFO:Available adapters: [
+    AdapterInfo {
+        name: "Apple M1",
+        vendor: 0,
+        device: 0,
+        device_type: IntegratedGpu,
+        driver: "",
+        driver_info: "",
+        backend: Metal,
+    },
+]
+2024-11-26 00:50:52 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:50:52 UTC - INFO:Selected: AdapterInfo {
+    name: "Apple M1",
+    vendor: 0,
+    device: 0,
+    device_type: IntegratedGpu,
+    driver: "",
+    driver_info: "",
+    backend: Metal,
+}
+2024-11-26 00:50:52 UTC - INFO:Available formats: Copied {
+    it: Iter(
+        [
+            Bgra8UnormSrgb,
+            Bgra8Unorm,
+            Rgba16Float,
+            Rgb10a2Unorm,
+        ],
+    ),
+}
+2024-11-26 00:50:52 UTC - INFO:Available alpha modes: [
+    Opaque,
+    PostMultiplied,
+]
+2024-11-26 00:50:52 UTC - INFO:Selected format: Bgra8UnormSrgb with alpha mode: PostMultiplied
+2024-11-26 00:50:52 UTC - INFO:Window attributes for id `Id(
+    1,
+)`: WindowAttributes {
+    inner_size: Some(
+        Logical(
+            LogicalSize {
+                width: 1980.0,
+                height: 1080.0,
+            },
+        ),
+    ),
+    min_inner_size: None,
+    max_inner_size: None,
+    position: None,
+    resizable: true,
+    enabled_buttons: WindowButtons(
+        CLOSE | MINIMIZE | MAXIMIZE,
+    ),
+    title: "Candlestick Chart",
+    maximized: false,
+    visible: false,
+    transparent: false,
+    blur: false,
+    decorations: true,
+    window_icon: None,
+    preferred_theme: None,
+    resize_increments: None,
+    content_protected: false,
+    window_level: Normal,
+    active: true,
+    cursor: Icon(
+        Default,
+    ),
+    parent_window: None,
+    fullscreen: None,
+    platform_specific: PlatformSpecificWindowAttributes {
+        movable_by_window_background: false,
+        titlebar_transparent: false,
+        title_hidden: false,
+        titlebar_hidden: false,
+        titlebar_buttons_hidden: false,
+        fullsize_content_view: false,
+        disallow_hidpi: false,
+        has_shadow: true,
+        accepts_first_mouse: true,
+        tabbing_identifier: None,
+        option_as_alt: None,
+    },
+}
+2024-11-26 00:50:52 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:50:52 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:51:19 UTC - INFO:Settings {
+    present_mode: AutoVsync,
+    backends: Backends(
+        VULKAN | GL | METAL | DX12 | BROWSER_WEBGPU,
+    ),
+    default_font: Font {
+        family: SansSerif,
+        weight: Normal,
+        stretch: Normal,
+        style: Normal,
+    },
+    default_text_size: Pixels(
+        16.0,
+    ),
+    antialiasing: None,
+}
+2024-11-26 00:51:19 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:51:19 UTC - INFO:Available adapters: [
+    AdapterInfo {
+        name: "Apple M1",
+        vendor: 0,
+        device: 0,
+        device_type: IntegratedGpu,
+        driver: "",
+        driver_info: "",
+        backend: Metal,
+    },
+]
+2024-11-26 00:51:19 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:51:19 UTC - INFO:Selected: AdapterInfo {
+    name: "Apple M1",
+    vendor: 0,
+    device: 0,
+    device_type: IntegratedGpu,
+    driver: "",
+    driver_info: "",
+    backend: Metal,
+}
+2024-11-26 00:51:19 UTC - INFO:Available formats: Copied {
+    it: Iter(
+        [
+            Bgra8UnormSrgb,
+            Bgra8Unorm,
+            Rgba16Float,
+            Rgb10a2Unorm,
+        ],
+    ),
+}
+2024-11-26 00:51:19 UTC - INFO:Available alpha modes: [
+    Opaque,
+    PostMultiplied,
+]
+2024-11-26 00:51:19 UTC - INFO:Selected format: Bgra8UnormSrgb with alpha mode: PostMultiplied
+2024-11-26 00:51:19 UTC - INFO:Window attributes for id `Id(
+    1,
+)`: WindowAttributes {
+    inner_size: Some(
+        Logical(
+            LogicalSize {
+                width: 1980.0,
+                height: 1080.0,
+            },
+        ),
+    ),
+    min_inner_size: None,
+    max_inner_size: None,
+    position: None,
+    resizable: true,
+    enabled_buttons: WindowButtons(
+        CLOSE | MINIMIZE | MAXIMIZE,
+    ),
+    title: "Candlestick Chart",
+    maximized: false,
+    visible: false,
+    transparent: false,
+    blur: false,
+    decorations: true,
+    window_icon: None,
+    preferred_theme: None,
+    resize_increments: None,
+    content_protected: false,
+    window_level: Normal,
+    active: true,
+    cursor: Icon(
+        Default,
+    ),
+    parent_window: None,
+    fullscreen: None,
+    platform_specific: PlatformSpecificWindowAttributes {
+        movable_by_window_background: false,
+        titlebar_transparent: false,
+        title_hidden: false,
+        titlebar_hidden: false,
+        titlebar_buttons_hidden: false,
+        fullsize_content_view: false,
+        disallow_hidpi: false,
+        has_shadow: true,
+        accepts_first_mouse: true,
+        tabbing_identifier: None,
+        option_as_alt: None,
+    },
+}
+2024-11-26 00:51:19 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:51:19 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:58:51 UTC - INFO:Settings {
+    present_mode: AutoVsync,
+    backends: Backends(
+        VULKAN | GL | METAL | DX12 | BROWSER_WEBGPU,
+    ),
+    default_font: Font {
+        family: SansSerif,
+        weight: Normal,
+        stretch: Normal,
+        style: Normal,
+    },
+    default_text_size: Pixels(
+        16.0,
+    ),
+    antialiasing: None,
+}
+2024-11-26 00:58:51 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:58:51 UTC - INFO:Available adapters: [
+    AdapterInfo {
+        name: "Apple M1",
+        vendor: 0,
+        device: 0,
+        device_type: IntegratedGpu,
+        driver: "",
+        driver_info: "",
+        backend: Metal,
+    },
+]
+2024-11-26 00:58:51 UTC - INFO:Adapter Metal AdapterInfo { name: "Apple M1", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+2024-11-26 00:58:51 UTC - INFO:Selected: AdapterInfo {
+    name: "Apple M1",
+    vendor: 0,
+    device: 0,
+    device_type: IntegratedGpu,
+    driver: "",
+    driver_info: "",
+    backend: Metal,
+}
+2024-11-26 00:58:51 UTC - INFO:Available formats: Copied {
+    it: Iter(
+        [
+            Bgra8UnormSrgb,
+            Bgra8Unorm,
+            Rgba16Float,
+            Rgb10a2Unorm,
+        ],
+    ),
+}
+2024-11-26 00:58:51 UTC - INFO:Available alpha modes: [
+    Opaque,
+    PostMultiplied,
+]
+2024-11-26 00:58:51 UTC - INFO:Selected format: Bgra8UnormSrgb with alpha mode: PostMultiplied
+2024-11-26 00:58:51 UTC - INFO:Window attributes for id `Id(
+    1,
+)`: WindowAttributes {
+    inner_size: Some(
+        Logical(
+            LogicalSize {
+                width: 1980.0,
+                height: 1080.0,
+            },
+        ),
+    ),
+    min_inner_size: None,
+    max_inner_size: None,
+    position: None,
+    resizable: true,
+    enabled_buttons: WindowButtons(
+        CLOSE | MINIMIZE | MAXIMIZE,
+    ),
+    title: "Candlestick Chart",
+    maximized: false,
+    visible: false,
+    transparent: false,
+    blur: false,
+    decorations: true,
+    window_icon: None,
+    preferred_theme: None,
+    resize_increments: None,
+    content_protected: false,
+    window_level: Normal,
+    active: true,
+    cursor: Icon(
+        Default,
+    ),
+    parent_window: None,
+    fullscreen: None,
+    platform_specific: PlatformSpecificWindowAttributes {
+        movable_by_window_background: false,
+        titlebar_transparent: false,
+        title_hidden: false,
+        titlebar_hidden: false,
+        titlebar_buttons_hidden: false,
+        fullsize_content_view: false,
+        disallow_hidpi: false,
+        has_shadow: true,
+        accepts_first_mouse: true,
+        tabbing_identifier: None,
+        option_as_alt: None,
+    },
+}
+2024-11-26 00:58:51 UTC - WARN:failed to load font 'GB18030Bitmap'
+2024-11-26 00:58:51 UTC - WARN:failed to load font 'GB18030Bitmap'
