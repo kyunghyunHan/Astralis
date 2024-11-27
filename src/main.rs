@@ -727,29 +727,36 @@ impl RTarde {
         .width(Length::Fixed(100.0));
 
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            let avg_price = self.average_prices.get(&self.selected_coin).copied().unwrap_or(0.0);
+            // 현재 보유중인 코인의 수익률 계산
+            let avg_price = self
+                .average_prices
+                .get(&self.selected_coin)
+                .copied()
+                .unwrap_or(0.0);
             let profit_percentage = if avg_price > 0.0 {
                 ((info.price - avg_price) / avg_price * 100.0)
             } else {
                 0.0
             };
-         
+
+            let profit_color = if profit_percentage >= 0.0 {
+                Color::from_rgb(0.0, 0.8, 0.0)
+            } else {
+                Color::from_rgb(0.8, 0.0, 0.0)
+            };
+
             let profit_color = if profit_percentage >= 0.0 {
                 Color::from_rgb(0.0, 0.8, 0.0) // 초록색 (이익)
             } else {
                 Color::from_rgb(0.8, 0.0, 0.0) // 빨간색 (손실)
             };
-         
+
             Column::new()
                 .spacing(10)
                 .push(
                     Container::new(
                         Column::new()
-                            .push(
-                                Text::new(&info.name)
-                                    .size(28)
-                                    .width(Length::Fill),
-                            )
+                            .push(Text::new(&info.name).size(28).width(Length::Fill))
                             .push(
                                 Text::new(&info.symbol)
                                     .size(14)
@@ -760,35 +767,37 @@ impl RTarde {
                     .width(Length::Fill),
                 )
                 .push(
+                    Container::new(Text::new(format!("{:.6} USDT", info.price)).size(32))
+                        .padding(15)
+                        .width(Length::Fill),
+                )
+                .push(
                     Container::new(
-                        Text::new(format!("{:.6} USDT", info.price)).size(32),
+                        Column::new().push(
+                            Text::new(format!("평가손익: {:.2}%", profit_percentage))
+                                .size(20)
+                                .color(profit_color),
+                        ),
                     )
-                    .padding(15)
+                    .padding(10)
                     .width(Length::Fill),
                 )
                 .push(
                     Container::new(
                         Column::new()
-                            .push(
-                                Text::new(format!("평균매수가: {:.6} USDT", avg_price))
-                                    .size(16)
-                            )
-                            .push(
-                                Text::new(format!("평가손익: {:.2}%", profit_percentage))
-                                    .size(20)
-                                    .color(profit_color)
-                            )
+                            .spacing(8)
                             .push(
                                 Row::new().spacing(10).push(Text::new("24h P/L:")).push(
                                     Text::new(match &self.account_info {
                                         Some(info) => {
+                                            // USDT 잔고 찾기
                                             let usdt_balance = info
                                                 .balances
                                                 .iter()
                                                 .find(|b| b.asset == "USDT")
                                                 .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
                                                 .unwrap_or(0.0);
-         
+
                                             if usdt_balance == 0.0 {
                                                 "0.00 USDT".to_string()
                                             } else {
@@ -797,7 +806,7 @@ impl RTarde {
                                         }
                                         None => "0.00 USDT".to_string(),
                                     })
-                                    .size(16),
+                                    .size(16), // .style(|_| TextColor::Gray),
                                 ),
                             )
                             .push(
@@ -816,9 +825,10 @@ impl RTarde {
                     .padding(10)
                     .width(Length::Fill),
                 )
-         } else {
-            Column::new().push(Text::new("Loading..."))
-         };
+        } else {
+            Column::new().push(Text::new("Loding..."))
+        };
+
         // 수정된 부분: Chart::new()에 selected_candle_type 전달
         let canvas = Canvas::new(Chart::new(
             self.candlesticks.clone(),
