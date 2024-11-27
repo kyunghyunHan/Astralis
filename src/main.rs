@@ -368,10 +368,10 @@ async fn execute_trade(
     let api_secret = env::var("BINANCE_API_SECRET")?;
 
     let symbol = format!("{}USDT", selected_coin);
-    
+
     // 거래 규칙 정보 가져오기
     let exchange_info = get_exchange_info(&symbol).await?;
-    
+
     // LOT_SIZE 필터 찾기
     let symbol_info = exchange_info["symbols"]
         .as_array()
@@ -387,26 +387,37 @@ async fn execute_trade(
         .find(|f| f["filterType"].as_str() == Some("LOT_SIZE"))
         .ok_or("LOT_SIZE filter not found")?;
 
-    let min_qty = lot_size_filter["minQty"].as_str().unwrap_or("0.00100").parse::<f64>()?;
-    let step_size = lot_size_filter["stepSize"].as_str().unwrap_or("0.00100").parse::<f64>()?;
+    let min_qty = lot_size_filter["minQty"]
+        .as_str()
+        .unwrap_or("0.00100")
+        .parse::<f64>()?;
+    let step_size = lot_size_filter["stepSize"]
+        .as_str()
+        .unwrap_or("0.00100")
+        .parse::<f64>()?;
 
     // 수량을 step size에 맞게 조정
     let decimal_places = (step_size.log10() * -1.0).ceil() as i32;
     let adjusted_amount = (amount / step_size).floor() * step_size;
-    
+
     // 최소 수량 체크
     if adjusted_amount < min_qty {
-        alert_sender.send((
-            format!("주문 실패: 최소 주문 수량은 {} {}입니다", min_qty, selected_coin),
-            AlertType::Error,
-        )).await?;
+        alert_sender
+            .send((
+                format!(
+                    "주문 실패: 최소 주문 수량은 {} {}입니다",
+                    min_qty, selected_coin
+                ),
+                AlertType::Error,
+            ))
+            .await?;
         return Err("Amount too small".into());
     }
 
     let formatted_quantity = format!("{:.*}", decimal_places as usize, adjusted_amount);
 
     let timestamp = chrono::Utc::now().timestamp_millis();
-    
+
     let side = match trade_type {
         TradeType::Buy => "BUY",
         TradeType::Sell => "SELL",
@@ -416,7 +427,7 @@ async fn execute_trade(
         "symbol={}&side={}&type=MARKET&quantity={}&timestamp={}",
         symbol, side, formatted_quantity, timestamp
     );
-    println!("{}",amount);
+    println!("{}", amount);
     // HMAC-SHA256 시그니처 생성
     let signature = hmac_sha256(&api_secret, &params);
 
@@ -679,6 +690,18 @@ impl RTarde {
 
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
             // let custom_font = Font::with_name("NotoSansCJK");
+            let profit_percentage = if let Some(first_candle) = self.candlesticks.values().next() {
+                let start_price = first_candle.open;
+                let current_price = info.price as f32;
+                ((current_price - start_price) / start_price * 100.0)
+            } else {
+                0.0
+            };
+            let profit_color = if profit_percentage >= 0.0 {
+                Color::from_rgb(0.0, 0.8, 0.0) // 초록색 (이익)
+            } else {
+                Color::from_rgb(0.8, 0.0, 0.0) // 빨간색 (손실)
+            };
 
             Column::new()
                 .spacing(10)
@@ -708,6 +731,15 @@ impl RTarde {
                         Text::new(format!("{:.6} USDT", info.price)).size(32), // .font(custom_font),
                     )
                     .padding(15)
+                    .width(Length::Fill),
+                )
+                .push(
+                    Container::new(
+                        Text::new(format!("수익률: {:.2}%", profit_percentage))
+                            .size(20)
+                            .color(profit_color),
+                    )
+                    .padding(10)
                     .width(Length::Fill),
                 )
                 .push(
@@ -978,10 +1010,10 @@ impl RTarde {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
                     let price = info.price;
                     // 5 USDT 상당의 코인 수량으로 변경
-                    let amount = 5.0 / price; 
+                    let amount = 5.0 / price;
                     let selected_coin = self.selected_coin.clone();
                     let alert_sender = self.alert_sender.clone();
-        
+
                     let runtime = tokio::runtime::Handle::current();
                     runtime.spawn(async move {
                         if let Err(e) = execute_trade(
@@ -996,48 +1028,67 @@ impl RTarde {
                             println!("시장가 매수 실패: {:?}", e);
                         }
                     });
-        
+
                     self.add_alert(
-                        format!("시장가 매수 시도: 5 USDT (수량: {:.8} {})", 
-                            amount, 
-                            self.selected_coin
+                        format!(
+                            "시장가 매수 시도: 5 USDT (수량: {:.8} {})",
+                            amount, self.selected_coin
                         ),
-                        AlertType::Info
+                        AlertType::Info,
                     );
                 }
             }
             Message::MarketSell => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
-                    let price = info.price;
-                    // 5 USDT 상당의 코인 수량으로 변경
-                    let amount = 5.0 / price; 
-                    let selected_coin = self.selected_coin.clone();
-                    let alert_sender = self.alert_sender.clone();
-        
-                    let runtime = tokio::runtime::Handle::current();
-                    runtime.spawn(async move {
-                        if let Err(e) = execute_trade(
-                            selected_coin,
-                            TradeType::Sell,
-                            price,
-                            amount,
-                            alert_sender,
-                        )
-                        .await
+                    // 현재 선택된 코인의 보유량 확인
+                    if let Some(account_info) = &self.account_info {
+                        if let Some(balance) = account_info
+                            .balances
+                            .iter()
+                            .find(|b| b.asset == self.selected_coin)
                         {
-                            println!("시장가 매도 실패: {:?}", e);
+                            if let Ok(total_amount) = balance.free.parse::<f64>() {
+                                if total_amount > 0.0 {
+                                    let price = info.price;
+                                    let selected_coin = self.selected_coin.clone();
+                                    let alert_sender = self.alert_sender.clone();
+
+                                    let runtime = tokio::runtime::Handle::current();
+                                    runtime.spawn(async move {
+                                        if let Err(e) = execute_trade(
+                                            selected_coin.clone(),
+                                            TradeType::Sell,
+                                            price,
+                                            total_amount,
+                                            alert_sender,
+                                        )
+                                        .await
+                                        {
+                                            println!("시장가 매도 실패: {:?}", e);
+                                        }
+                                    });
+
+                                    self.add_alert(
+                                        format!(
+                                            "전체 수량 매도 시도: {:.8} {}",
+                                            total_amount, self.selected_coin
+                                        ),
+                                        AlertType::Info,
+                                    );
+                                } else {
+                                    self.add_alert(
+                                        format!(
+                                            "매도 실패: {} 보유량이 없습니다",
+                                            self.selected_coin
+                                        ),
+                                        AlertType::Error,
+                                    );
+                                }
+                            }
                         }
-                    });
-        
-                    self.add_alert(
-                        format!("시장가 매도 시도: 5 USDT (수량: {:.8} {})", 
-                            amount, 
-                            self.selected_coin
-                        ),
-                        AlertType::Info
-                    );
+                    }
                 }
-            }      
+            }
             Message::ToggleAutoTrading => {
                 self.auto_trading_enabled = !self.auto_trading_enabled;
                 let status = if self.auto_trading_enabled {
