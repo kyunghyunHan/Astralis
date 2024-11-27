@@ -55,6 +55,7 @@ struct RTarde {
     last_trade_time: Option<Instant>, // 마지막 거래 시간 (과도한 거래 방지용)
     alert_sender: mpsc::Sender<(String, AlertType)>,
     alert_receiver: mpsc::Receiver<(String, AlertType)>,
+    average_prices: HashMap<String, f64>,
 }
 #[derive(Debug, Clone)]
 struct Alert {
@@ -68,6 +69,18 @@ enum AlertType {
     Sell,  // 매도 신호
     Info,  // 일반 정보
     Error, // 에러
+}
+#[derive(Debug, Deserialize, Clone)]
+struct Trade {
+    symbol: String,
+    id: u64,
+    price: String,
+    qty: String,
+    #[serde(rename = "quoteQty")]
+    quote_qty: String,
+    #[serde(rename = "isBuyer")]
+    is_buyer: bool,
+    time: u64,
 }
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -108,6 +121,7 @@ pub enum Message {
     ToggleAutoTrading, // 자동매매 토글
     MarketBuy,         // 시장가 매수 메시지 추가
     MarketSell,        // 시장가 매도 메시지 추가
+    UpdateAveragePrice(String, f64),
 }
 #[derive(Debug, Clone, Copy)]
 enum TradeType {
@@ -490,11 +504,9 @@ async fn execute_trade(
 }
 fn binance_account_connection() -> impl Stream<Item = Message> {
     stream! {
-        // 환경변수에서 API 키 읽기
         let api_key = match env::var("BINANCE_API_KEY") {
             Ok(key) => key,
             Err(_) => {
-                println!("Error: BINANCE_API_KEY 환경변수가 설정되지 않았습니다");
                 yield Message::FetchError("API KEY not found".to_string());
                 return;
             }
@@ -503,7 +515,6 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
         let api_secret = match env::var("BINANCE_API_SECRET") {
             Ok(secret) => secret,
             Err(_) => {
-                println!("Error: BINANCE_API_SECRET 환경변수가 설정되지 않았습니다");
                 yield Message::FetchError("API SECRET not found".to_string());
                 return;
             }
@@ -516,7 +527,7 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
             let query = format!("timestamp={}", timestamp);
             let signature = hmac_sha256(&api_secret, &query);
 
-            // 계정 정보 가져오기
+            // 계정 정보 가져오기 (기존)
             let account_url = format!(
                 "https://api.binance.com/api/v3/account?{}&signature={}",
                 query, signature
@@ -529,24 +540,50 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
                 .await
             {
                 if let Ok(account_info) = response.json::<AccountInfo>().await {
+                    // 보유한 코인에 대해 거래 내역 조회
+                    for balance in &account_info.balances {
+                        if balance.free.parse::<f64>().unwrap_or(0.0) > 0.0 {
+                            let symbol = format!("{}USDT", balance.asset);
+                            let trades_query = format!("symbol={}&timestamp={}", symbol, timestamp);
+                            let trades_signature = hmac_sha256(&api_secret, &trades_query);
+
+                            let trades_url = format!(
+                                "https://api.binance.com/api/v3/myTrades?{}&signature={}",
+                                trades_query, trades_signature
+                            );
+
+                            if let Ok(trades_response) = client
+                                .get(&trades_url)
+                                .header("X-MBX-APIKEY", &api_key)
+                                .send()
+                                .await
+                            {
+                                if let Ok(trades) = trades_response.json::<Vec<Trade>>().await {
+                                    // 매수 평균가 계산
+                                    let mut total_buy_amount = 0.0;
+                                    let mut total_buy_quantity = 0.0;
+
+                                    for trade in trades {
+                                        if trade.is_buyer {
+                                            let price = trade.price.parse::<f64>().unwrap_or(0.0);
+                                            let quantity = trade.qty.parse::<f64>().unwrap_or(0.0);
+                                            total_buy_amount += price * quantity;
+                                            total_buy_quantity += quantity;
+                                        }
+                                    }
+
+                                    let avg_price = if total_buy_quantity > 0.0 {
+                                        total_buy_amount / total_buy_quantity
+                                    } else {
+                                        0.0
+                                    };
+
+                                    yield Message::UpdateAveragePrice(balance.asset.clone(), avg_price);
+                                }
+                            }
+                        }
+                    }
                     yield Message::UpdateAccountInfo(account_info);
-                }
-            }
-
-            // 오픈된 주문 정보 가져오기
-            let positions_url = format!(
-                "https://api.binance.com/api/v3/openOrders?{}&signature={}",
-                query, signature
-            );
-
-            if let Ok(response) = client
-                .get(&positions_url)
-                .header("X-MBX-APIKEY", &api_key)
-                .send()
-                .await
-            {
-                if let Ok(positions) = response.json::<Vec<Position>>().await {
-                    yield Message::UpdatePositions(positions);
                 }
             }
 
@@ -598,6 +635,7 @@ impl Default for RTarde {
             last_trade_time: None,
             alert_sender,
             alert_receiver,
+            average_prices: HashMap::new(),
         }
     }
 }
@@ -689,36 +727,32 @@ impl RTarde {
         .width(Length::Fixed(100.0));
 
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            // let custom_font = Font::with_name("NotoSansCJK");
-            let profit_percentage = if let Some(first_candle) = self.candlesticks.values().next() {
-                let start_price = first_candle.open;
-                let current_price = info.price as f32;
-                ((current_price - start_price) / start_price * 100.0)
+            let avg_price = self.average_prices.get(&self.selected_coin).copied().unwrap_or(0.0);
+            let profit_percentage = if avg_price > 0.0 {
+                ((info.price - avg_price) / avg_price * 100.0)
             } else {
                 0.0
             };
+         
             let profit_color = if profit_percentage >= 0.0 {
                 Color::from_rgb(0.0, 0.8, 0.0) // 초록색 (이익)
             } else {
                 Color::from_rgb(0.8, 0.0, 0.0) // 빨간색 (손실)
             };
-
+         
             Column::new()
                 .spacing(10)
                 .push(
-                    // 코인 이름과 심볼
                     Container::new(
                         Column::new()
                             .push(
                                 Text::new(&info.name)
                                     .size(28)
-                                    // .font(custom_font)
                                     .width(Length::Fill),
                             )
                             .push(
                                 Text::new(&info.symbol)
                                     .size(14)
-                                    // .font(custom_font)
                                     .color(Color::from_rgb(0.5, 0.5, 0.5)),
                             ),
                     )
@@ -726,38 +760,35 @@ impl RTarde {
                     .width(Length::Fill),
                 )
                 .push(
-                    // 가격 정보
                     Container::new(
-                        Text::new(format!("{:.6} USDT", info.price)).size(32), // .font(custom_font),
+                        Text::new(format!("{:.6} USDT", info.price)).size(32),
                     )
                     .padding(15)
                     .width(Length::Fill),
                 )
                 .push(
                     Container::new(
-                        Text::new(format!("수익률: {:.2}%", profit_percentage))
-                            .size(20)
-                            .color(profit_color),
-                    )
-                    .padding(10)
-                    .width(Length::Fill),
-                )
-                .push(
-                    Container::new(
                         Column::new()
-                            .spacing(8)
+                            .push(
+                                Text::new(format!("평균매수가: {:.6} USDT", avg_price))
+                                    .size(16)
+                            )
+                            .push(
+                                Text::new(format!("평가손익: {:.2}%", profit_percentage))
+                                    .size(20)
+                                    .color(profit_color)
+                            )
                             .push(
                                 Row::new().spacing(10).push(Text::new("24h P/L:")).push(
                                     Text::new(match &self.account_info {
                                         Some(info) => {
-                                            // USDT 잔고 찾기
                                             let usdt_balance = info
                                                 .balances
                                                 .iter()
                                                 .find(|b| b.asset == "USDT")
                                                 .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
                                                 .unwrap_or(0.0);
-
+         
                                             if usdt_balance == 0.0 {
                                                 "0.00 USDT".to_string()
                                             } else {
@@ -766,7 +797,7 @@ impl RTarde {
                                         }
                                         None => "0.00 USDT".to_string(),
                                     })
-                                    .size(16), // .style(|_| TextColor::Gray),
+                                    .size(16),
                                 ),
                             )
                             .push(
@@ -785,10 +816,9 @@ impl RTarde {
                     .padding(10)
                     .width(Length::Fill),
                 )
-        } else {
-            Column::new().push(Text::new("Loding..."))
-        };
-
+         } else {
+            Column::new().push(Text::new("Loading..."))
+         };
         // 수정된 부분: Chart::new()에 selected_candle_type 전달
         let canvas = Canvas::new(Chart::new(
             self.candlesticks.clone(),
@@ -1006,6 +1036,10 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::UpdateAveragePrice(symbol, price) => {
+                self.average_prices.insert(symbol, price);
+            }
+
             Message::MarketBuy => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
                     let price = info.price;
