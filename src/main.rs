@@ -425,11 +425,11 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
 impl Default for RTarde {
     fn default() -> Self {
         let mut coin_list = HashMap::new();
-        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT", "TRX"] {
+        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT", "TRX","TON","SHIB","DOGE","PEPE","BMB","SUI","XLM","ADA"] {
             coin_list.insert(
                 symbol.to_string(),
                 CoinInfo {
-                    symbol: format!("USDT-{}", symbol),
+                    symbol: format!("{}-USDT", symbol),
                     name: symbol.to_string(),
                     price: 0.0,
                 },
