@@ -1,7 +1,9 @@
 #![allow(non_utf8_strings)]
 use async_stream::stream;
 use dotenv::dotenv;
-use futures_util::Stream;
+use futures_util::SinkExt;
+use futures_util::Stream; // Add this at the top with other imports
+
 use iced::futures::{channel::mpsc, StreamExt};
 use iced::time::{self, Duration, Instant};
 use iced::widget::Row;
@@ -104,6 +106,8 @@ pub enum Message {
     RemoveAlert,
     Tick,              // 알림 타이머용
     ToggleAutoTrading, // 자동매매 토글
+    MarketBuy,         // 시장가 매수 메시지 추가
+    MarketSell,        // 시장가 매도 메시지 추가
 }
 #[derive(Debug, Clone, Copy)]
 enum TradeType {
@@ -346,14 +350,132 @@ fn binance_connection() -> impl Stream<Item = Message> {
         }
     }
 }
+
+async fn get_exchange_info(symbol: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let url = format!("https://fapi.binance.com/fapi/v1/exchangeInfo");
+    let response = reqwest::Client::new().get(&url).send().await?;
+    let info = response.json::<serde_json::Value>().await?;
+    Ok(info)
+}
 async fn execute_trade(
     selected_coin: String,
     trade_type: TradeType,
     price: f64,
     amount: f64,
-    alert_sender: mpsc::Sender<(String, AlertType)>,
+    mut alert_sender: mpsc::Sender<(String, AlertType)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
+    let api_key = env::var("BINANCE_API_KEY")?;
+    let api_secret = env::var("BINANCE_API_SECRET")?;
+
+    let symbol = format!("{}USDT", selected_coin);
+    
+    // 거래 규칙 정보 가져오기
+    let exchange_info = get_exchange_info(&symbol).await?;
+    
+    // LOT_SIZE 필터 찾기
+    let symbol_info = exchange_info["symbols"]
+        .as_array()
+        .ok_or("No symbols found")?
+        .iter()
+        .find(|s| s["symbol"].as_str() == Some(&symbol))
+        .ok_or("Symbol not found")?;
+
+    let lot_size_filter = symbol_info["filters"]
+        .as_array()
+        .ok_or("No filters found")?
+        .iter()
+        .find(|f| f["filterType"].as_str() == Some("LOT_SIZE"))
+        .ok_or("LOT_SIZE filter not found")?;
+
+    let min_qty = lot_size_filter["minQty"].as_str().unwrap_or("0.00100").parse::<f64>()?;
+    let step_size = lot_size_filter["stepSize"].as_str().unwrap_or("0.00100").parse::<f64>()?;
+
+    // 수량을 step size에 맞게 조정
+    let decimal_places = (step_size.log10() * -1.0).ceil() as i32;
+    let adjusted_amount = (amount / step_size).floor() * step_size;
+    
+    // 최소 수량 체크
+    if adjusted_amount < min_qty {
+        alert_sender.send((
+            format!("주문 실패: 최소 주문 수량은 {} {}입니다", min_qty, selected_coin),
+            AlertType::Error,
+        )).await?;
+        return Err("Amount too small".into());
+    }
+
+    let formatted_quantity = format!("{:.*}", decimal_places as usize, adjusted_amount);
+
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    
+    let side = match trade_type {
+        TradeType::Buy => "BUY",
+        TradeType::Sell => "SELL",
+    };
+
+    let params = format!(
+        "symbol={}&side={}&type=MARKET&quantity={}&timestamp={}",
+        symbol, side, formatted_quantity, timestamp
+    );
+    println!("{}",amount);
+    // HMAC-SHA256 시그니처 생성
+    let signature = hmac_sha256(&api_secret, &params);
+
+    // 선물 API 엔드포인트 URL 구성
+    let url = format!(
+        "https://api.binance.com/api/v3/order?{}&signature={}",
+        params, signature
+    );
+
+    // HTTP 클라이언트 생성
+    let client = reqwest::Client::new();
+
+    // POST 요청 실행
+    let response = client
+        .post(&url)
+        .header("X-MBX-APIKEY", &api_key)
+        .send()
+        .await?;
+
+    // 응답 처리
+    if response.status().is_success() {
+        let result = response.json::<serde_json::Value>().await?;
+
+        // 주문 성공 알림 전송
+        let message = format!(
+            "{} 주문 성공:\n수량: {:.8} {}\n가격: {:.2} USDT",
+            match trade_type {
+                TradeType::Buy => "매수",
+                TradeType::Sell => "매도",
+            },
+            amount,
+            selected_coin,
+            price
+        );
+
+        alert_sender
+            .send((
+                message,
+                match trade_type {
+                    TradeType::Buy => AlertType::Buy,
+                    TradeType::Sell => AlertType::Sell,
+                },
+            ))
+            .await?;
+
+        println!("Response: {:?}", result); // 응답 내용 출력
+        Ok(())
+    } else {
+        // 에러 응답 처리
+        let error_msg = response.text().await?;
+        println!("Error response: {}", error_msg); // 에러 내용 출력
+
+        // 에러 알림 전송
+        alert_sender
+            .send((format!("주문 실패: {}", error_msg), AlertType::Error))
+            .await?;
+
+        Err(error_msg.into())
+    }
 }
 fn binance_account_connection() -> impl Stream<Item = Message> {
     stream! {
@@ -425,7 +547,10 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
 impl Default for RTarde {
     fn default() -> Self {
         let mut coin_list = HashMap::new();
-        for symbol in &["BTC", "ETH", "XRP", "SOL", "DOT", "TRX","TON","SHIB","DOGE","PEPE","BMB","SUI","XLM","ADA"] {
+        for symbol in &[
+            "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BMB", "SUI",
+            "XLM", "ADA",
+        ] {
             coin_list.insert(
                 symbol.to_string(),
                 CoinInfo {
@@ -580,7 +705,7 @@ impl RTarde {
                 .push(
                     // 가격 정보
                     Container::new(
-                        Text::new(format!("{:.2} USDT", info.price)).size(32), // .font(custom_font),
+                        Text::new(format!("{:.6} USDT", info.price)).size(32), // .font(custom_font),
                     )
                     .padding(15)
                     .width(Length::Fill),
@@ -734,8 +859,16 @@ impl RTarde {
                     .push(
                         Row::new()
                             .spacing(10)
-                            .push(button(Text::new("buy at market price")).width(Length::Fill))
-                            .push(button(Text::new("sell at market price")).width(Length::Fill)),
+                            .push(
+                                button(Text::new("buy at market price"))
+                                    .width(Length::Fill)
+                                    .on_press(Message::MarketBuy),
+                            )
+                            .push(
+                                button(Text::new("sell at market price"))
+                                    .width(Length::Fill)
+                                    .on_press(Message::MarketSell),
+                            ),
                     ),
             )
             .push(
@@ -841,6 +974,70 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::MarketBuy => {
+                if let Some(info) = self.coin_list.get(&self.selected_coin) {
+                    let price = info.price;
+                    // 5 USDT 상당의 코인 수량으로 변경
+                    let amount = 5.0 / price; 
+                    let selected_coin = self.selected_coin.clone();
+                    let alert_sender = self.alert_sender.clone();
+        
+                    let runtime = tokio::runtime::Handle::current();
+                    runtime.spawn(async move {
+                        if let Err(e) = execute_trade(
+                            selected_coin,
+                            TradeType::Buy,
+                            price,
+                            amount,
+                            alert_sender,
+                        )
+                        .await
+                        {
+                            println!("시장가 매수 실패: {:?}", e);
+                        }
+                    });
+        
+                    self.add_alert(
+                        format!("시장가 매수 시도: 5 USDT (수량: {:.8} {})", 
+                            amount, 
+                            self.selected_coin
+                        ),
+                        AlertType::Info
+                    );
+                }
+            }
+            Message::MarketSell => {
+                if let Some(info) = self.coin_list.get(&self.selected_coin) {
+                    let price = info.price;
+                    // 5 USDT 상당의 코인 수량으로 변경
+                    let amount = 5.0 / price; 
+                    let selected_coin = self.selected_coin.clone();
+                    let alert_sender = self.alert_sender.clone();
+        
+                    let runtime = tokio::runtime::Handle::current();
+                    runtime.spawn(async move {
+                        if let Err(e) = execute_trade(
+                            selected_coin,
+                            TradeType::Sell,
+                            price,
+                            amount,
+                            alert_sender,
+                        )
+                        .await
+                        {
+                            println!("시장가 매도 실패: {:?}", e);
+                        }
+                    });
+        
+                    self.add_alert(
+                        format!("시장가 매도 시도: 5 USDT (수량: {:.8} {})", 
+                            amount, 
+                            self.selected_coin
+                        ),
+                        AlertType::Info
+                    );
+                }
+            }      
             Message::ToggleAutoTrading => {
                 self.auto_trading_enabled = !self.auto_trading_enabled;
                 let status = if self.auto_trading_enabled {
