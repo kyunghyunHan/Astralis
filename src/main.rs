@@ -56,6 +56,9 @@ struct RTarde {
     alert_sender: mpsc::Sender<(String, AlertType)>,
     alert_receiver: mpsc::Receiver<(String, AlertType)>,
     average_prices: HashMap<String, f64>,
+    trading_mode: TradingMode,
+
+    
 }
 #[derive(Debug, Clone)]
 struct Alert {
@@ -69,6 +72,12 @@ enum AlertType {
     Sell,  // 매도 신호
     Info,  // 일반 정보
     Error, // 에러
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]  // Copy trait 추가
+enum TradingMode {
+    Spot,    // 현물
+    Futures, // 선물
 }
 #[derive(Debug, Deserialize, Clone)]
 struct Trade {
@@ -122,6 +131,8 @@ pub enum Message {
     MarketBuy,         // 시장가 매수 메시지 추가
     MarketSell,        // 시장가 매도 메시지 추가
     UpdateAveragePrice(String, f64),
+    ToggleTradingMode(TradingMode),
+
 }
 #[derive(Debug, Clone, Copy)]
 enum TradeType {
@@ -364,8 +375,12 @@ fn binance_connection() -> impl Stream<Item = Message> {
         }
     }
 }
-async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
-    let url = "https://api.binance.com/api/v3/ticker/24hr";
+async fn get_top_volume_pairs(mode: TradingMode) -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
+    // 모드에 따라 다른 API 엔드포인트 사용
+    let url = match mode {
+        TradingMode::Spot => "https://api.binance.com/api/v3/ticker/24hr",
+        TradingMode::Futures => "https://fapi.binance.com/fapi/v1/ticker/24hr",
+    };
     
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
@@ -381,7 +396,10 @@ async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error
         })
         .filter_map(|item| {
             let symbol = item["symbol"].as_str()?.to_string();
-            let volume = item["quoteVolume"].as_str()?.parse::<f64>().ok()?;
+            let volume = match mode {
+                TradingMode::Spot => item["quoteVolume"].as_str()?,
+                TradingMode::Futures => item["volume"].as_str()?,
+            }.parse::<f64>().ok()?;
             Some((symbol, volume))
         })
         .collect();
@@ -392,7 +410,6 @@ async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error
     // 상위 20개만 반환
     Ok(pairs.into_iter().take(20).collect())
 }
-
 async fn get_exchange_info(symbol: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let url = format!("https://fapi.binance.com/fapi/v1/exchangeInfo");
     let response = reqwest::Client::new().get(&url).send().await?;
@@ -625,7 +642,7 @@ impl Default for RTarde {
         // 거래량 상위 20개 코인 가져오기
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let top_pairs = runtime.block_on(async {
-            match get_top_volume_pairs().await {
+            match get_top_volume_pairs(TradingMode::Spot).await {  // 기본값으로 현물 모드
                 Ok(pairs) => pairs,
                 Err(e) => {
                     println!("Error fetching top pairs: {}", e);
@@ -668,33 +685,40 @@ impl Default for RTarde {
 
         let (alert_sender, alert_receiver) = mpsc::channel(100);
 
-        Self {
-            candlesticks: fetch_candles("USDT-BTC", &CandleType::Day, None).unwrap_or_default(),
-            selected_coin: "BTC".to_string(),
-            selected_candle_type: CandleType::Day,
-            coin_list,
-            auto_scroll: true,
-            ws_sender: None,
-            show_ma5: false,
-            show_ma10: false,
-            show_ma20: false,
-            show_ma200: false,
-            loading_more: false,
-            oldest_date: None,
-            knn_enabled: false,
-            knn_prediction: None,
-            knn_buy_signals: BTreeMap::new(),
-            knn_sell_signals: BTreeMap::new(),
-            account_info: None,
-            positions: Vec::new(),
-            alerts: VecDeque::with_capacity(5),
-            alert_timeout: None,
-            auto_trading_enabled: false,
-            last_trade_time: None,
-            alert_sender,
-            alert_receiver,
-            average_prices: HashMap::new(),
-        }
+       
+            Self {
+                candlesticks: fetch_candles(
+                    "USDT-BTC", 
+                    &CandleType::Day, 
+                    None,
+                    TradingMode::Spot  // trading_mode 추가 (초기값은 현물)
+                ).unwrap_or_default(),
+                selected_coin: "BTC".to_string(),
+                selected_candle_type: CandleType::Day,
+                coin_list,
+                auto_scroll: true,
+                ws_sender: None,
+                show_ma5: false,
+                show_ma10: false,
+                show_ma20: false,
+                show_ma200: false,
+                loading_more: false,
+                oldest_date: None,
+                knn_enabled: false,
+                knn_prediction: None,
+                knn_buy_signals: BTreeMap::new(),
+                knn_sell_signals: BTreeMap::new(),
+                account_info: None,
+                positions: Vec::new(),
+                alerts: VecDeque::with_capacity(5),
+                alert_timeout: None,
+                auto_trading_enabled: false,
+                last_trade_time: None,
+                alert_sender,
+                alert_receiver,
+                average_prices: HashMap::new(),
+                trading_mode: TradingMode::Spot,  // 기본값은 현물 모드
+            }
     }
 }
 impl RTarde {
@@ -1081,13 +1105,37 @@ impl RTarde {
                             ),
                     ),
             ));
-
+            let mode_toggle = Container::new(
+                Row::new()
+                    .spacing(10)
+                    .push(
+                        button(Text::new("Spot"))
+                            // .style(if self.trading_mode == TradingMode::Spot {
+                            //     theme::Button::Primary
+                            // } else {
+                            //     theme::Button::Secondary
+                            // })
+                            .on_press(Message::ToggleTradingMode(TradingMode::Spot)),
+                    )
+                    .push(
+                        button(Text::new("Futures"))
+                            // .style(if self.trading_mode == TradingMode::Futures {
+                            //     theme::Button::Primary
+                            // } else {
+                            //     theme::Button::Secondary
+                            // })
+                            .on_press(Message::ToggleTradingMode(TradingMode::Futures)),
+                    ),
+            )
+            .padding(10)
+            .width(Length::Fill);
         //메인
 
         Column::new()
             // .spacing(20)
             .push(
                 Row::new()
+                    .push(mode_toggle.width(FillPortion(2)))
                     .push(coin_picker.width(FillPortion(1)))
                     .push(candle_type_picker.width(FillPortion(1)))
                     .push(ma_controls.width(FillPortion(8)))
@@ -1104,6 +1152,41 @@ impl RTarde {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::ToggleTradingMode(mode) => {
+                self.trading_mode = mode;
+                let mode_str = match mode {
+                    TradingMode::Spot => "현물",
+                    TradingMode::Futures => "선물",
+                };
+            
+                // 모드 변경 시 코인 리스트 업데이트
+                let runtime = tokio::runtime::Handle::current();
+                let result = runtime.block_on(async {
+                    get_top_volume_pairs(mode).await
+                });
+            
+                match result {
+                    Ok(pairs) => {
+                        self.coin_list.clear();
+                        for (symbol, _volume) in pairs {
+                            let symbol = symbol.strip_suffix("USDT").unwrap_or(&symbol);
+                            self.coin_list.insert(
+                                symbol.to_string(),
+                                CoinInfo {
+                                    symbol: format!("{}-USDT", symbol),
+                                    name: symbol.to_string(),
+                                    price: 0.0,
+                                },
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        println!("Error fetching top pairs: {}", e);
+                    }
+                }
+            
+                self.add_alert(format!("거래 모드 변경: {}", mode_str), AlertType::Info);
+            }
             Message::UpdateAveragePrice(symbol, price) => {
                 self.average_prices.insert(symbol, price);
             }
@@ -1438,8 +1521,10 @@ impl RTarde {
                         let candle_type = self.selected_candle_type.clone();
 
                         let runtime = tokio::runtime::Handle::current();
+                        let trading_mode = self.trading_mode;  // 현재 모드 캡처
+                        
                         runtime.spawn(async move {
-                            match fetch_candles_async(&market, &candle_type, Some(date_str)).await {
+                            match fetch_candles_async(&market, &candle_type, Some(date_str), trading_mode).await {
                                 Ok(new_candles) => Message::MoreCandlesLoaded(new_candles),
                                 Err(_) => Message::Error,
                             }
@@ -1475,9 +1560,7 @@ impl RTarde {
                     "Fetching new candles for market {} with type {}",
                     market, candle_type
                 );
-
-                match fetch_candles(&market, &candle_type, None) {
-                    // None을 추가하여 최신 데이터부터 가져오기
+                match fetch_candles(&market, &candle_type, None, self.trading_mode) {
                     Ok(candles) => {
                         println!(
                             "Successfully fetched {} candles for {}",
@@ -1491,7 +1574,7 @@ impl RTarde {
                                 calculate_knn_signals(&self.candlesticks, false);
                             self.knn_buy_signals = buy_signals;
                             self.knn_sell_signals = sell_signals;
-
+                
                             // 예측도 업데이트
                             if let Some(prediction) = self.predict_knn() {
                                 self.knn_prediction = Some(prediction);
@@ -1509,13 +1592,14 @@ impl RTarde {
                         } else {
                             self.oldest_date = None;
                         }
-
+                
                         self.auto_scroll = true;
                     }
                     Err(e) => {
                         println!("Error fetching {} candles: {:?}", candle_type, e);
                     }
                 }
+                
             }
             Message::UpdatePrice(symbol, price, change_rate) => {
                 if let Some(info) = self.coin_list.get_mut(&symbol) {
@@ -1537,7 +1621,8 @@ impl RTarde {
                     &format!("USDT-{}", symbol),
                     &self.selected_candle_type,
                     None,
-                ) {
+                    self.trading_mode  // trading_mode 추가
+                ) { 
                     Ok(candles) => {
                         if candles.is_empty() {
                             println!("Warning: No candles received for {}", symbol);
@@ -1554,7 +1639,7 @@ impl RTarde {
                                     calculate_knn_signals(&self.candlesticks, false);
                                 self.knn_buy_signals = buy_signals;
                                 self.knn_sell_signals = sell_signals;
-
+                
                                 // 예측도 업데이트
                                 if let Some(prediction) = self.predict_knn() {
                                     self.knn_prediction = Some(prediction);
@@ -1575,6 +1660,7 @@ impl RTarde {
                     Err(e) => {
                         println!("Error fetching candles for {}: {:?}", symbol, e);
                     }
+                
                 }
 
                 if let Some(sender) = &self.ws_sender {
@@ -1609,6 +1695,7 @@ impl RTarde {
                         &format!("USDT-{}", self.selected_coin),
                         &self.selected_candle_type,
                         None,
+                        self.trading_mode  // trading_mode 추가
                     ) {
                         self.candlesticks = candles;
                     }
@@ -2528,6 +2615,7 @@ async fn fetch_candles_async(
     market: &str,
     candle_type: &CandleType,
     to_date: Option<String>,
+    mode: TradingMode,
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let count = match candle_type {
         CandleType::Day => 1000,
@@ -2547,10 +2635,17 @@ async fn fetch_candles_async(
         CandleType::Day => "1d",
     };
 
-    let url = format!(
-        "https://api.binance.com/api/v3/klines?symbol={}&interval={}&limit={}",
-        binance_symbol, interval, count
-    );
+    // 모드에 따라 다른 엔드포인트 사용
+    let url = match mode {
+        TradingMode::Spot => format!(
+            "https://api.binance.com/api/v3/klines?symbol={}&interval={}&limit={}",
+            binance_symbol, interval, count
+        ),
+        TradingMode::Futures => format!(
+            "https://fapi.binance.com/fapi/v1/klines?symbol={}&interval={}&limit={}",
+            binance_symbol, interval, count
+        ),
+    };
 
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await?;
@@ -2595,10 +2690,11 @@ async fn fetch_candles_async(
 fn fetch_candles(
     market: &str,
     candle_type: &CandleType,
-    to_date: Option<String>, // 추가
+    to_date: Option<String>,
+    mode: TradingMode,
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(fetch_candles_async(market, candle_type, to_date))
+    rt.block_on(fetch_candles_async(market, candle_type, to_date, mode))
 }
 
 impl OptimizedKNNPredictor {
