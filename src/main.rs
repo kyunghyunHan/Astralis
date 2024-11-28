@@ -364,6 +364,34 @@ fn binance_connection() -> impl Stream<Item = Message> {
         }
     }
 }
+async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
+    let url = "https://api.binance.com/api/v3/ticker/24hr";
+    
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await?;
+    let data: Vec<serde_json::Value> = response.json().await?;
+    
+    // USDT 마켓만 필터링하고 거래량으로 정렬
+    let mut pairs: Vec<(String, f64)> = data
+        .into_iter()
+        .filter(|item| {
+            item["symbol"].as_str()
+                .map(|s| s.ends_with("USDT"))
+                .unwrap_or(false)
+        })
+        .filter_map(|item| {
+            let symbol = item["symbol"].as_str()?.to_string();
+            let volume = item["quoteVolume"].as_str()?.parse::<f64>().ok()?;
+            Some((symbol, volume))
+        })
+        .collect();
+    
+    // 거래량 기준으로 내림차순 정렬
+    pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    
+    // 상위 20개만 반환
+    Ok(pairs.into_iter().take(20).collect())
+}
 
 async fn get_exchange_info(symbol: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let url = format!("https://fapi.binance.com/fapi/v1/exchangeInfo");
@@ -594,11 +622,23 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
 /*===============RTarde LINE================= */
 impl Default for RTarde {
     fn default() -> Self {
+        // 거래량 상위 20개 코인 가져오기
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let top_pairs = runtime.block_on(async {
+            match get_top_volume_pairs().await {
+                Ok(pairs) => pairs,
+                Err(e) => {
+                    println!("Error fetching top pairs: {}", e);
+                    vec![] // 에러 시 빈 벡터 반환
+                }
+            }
+        });
+
         let mut coin_list = HashMap::new();
-        for symbol in &[
-            "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BNB", "SUI",
-            "XLM", "ADA",
-        ] {
+        
+        // 상위 20개 코인으로 초기화
+        for (symbol, _volume) in top_pairs {
+            let symbol = symbol.strip_suffix("USDT").unwrap_or(&symbol);
             coin_list.insert(
                 symbol.to_string(),
                 CoinInfo {
@@ -608,6 +648,24 @@ impl Default for RTarde {
                 },
             );
         }
+
+        // 만약 API 호출이 실패하면 기본 리스트 사용
+        if coin_list.is_empty() {
+            for symbol in &[
+                "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BNB", "SUI",
+                "XLM", "ADA",
+            ] {
+                coin_list.insert(
+                    symbol.to_string(),
+                    CoinInfo {
+                        symbol: format!("{}-USDT", symbol),
+                        name: symbol.to_string(),
+                        price: 0.0,
+                    },
+                );
+            }
+        }
+
         let (alert_sender, alert_receiver) = mpsc::channel(100);
 
         Self {
@@ -629,7 +687,7 @@ impl Default for RTarde {
             knn_sell_signals: BTreeMap::new(),
             account_info: None,
             positions: Vec::new(),
-            alerts: VecDeque::with_capacity(5), // 최대 5개의 알림을 저장할 수 있는 큐
+            alerts: VecDeque::with_capacity(5),
             alert_timeout: None,
             auto_trading_enabled: false,
             last_trade_time: None,
