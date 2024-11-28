@@ -596,7 +596,7 @@ impl Default for RTarde {
     fn default() -> Self {
         let mut coin_list = HashMap::new();
         for symbol in &[
-            "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BMB", "SUI",
+            "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BNB", "SUI",
             "XLM", "ADA",
         ] {
             coin_list.insert(
@@ -1805,7 +1805,17 @@ impl<Message> Program<Message> for Chart {
         let price_diff = (max_price - min_price).max(f32::EPSILON);
         let y_scale = (price_chart_height / price_diff).min(1e6);
         let volume_scale = (volume_height / max_volume).min(1e6);
-
+        let price_format = |price: f32| {
+            if price < 0.0001 {
+                format!("{:.8}", price)  // 매우 작은 가격
+            } else if price < 0.01 {
+                format!("{:.6}", price)  // 작은 가격
+            } else if price < 1.0 {
+                format!("{:.4}", price)  // 중간 가격
+            } else {
+                format!("{:.2}", price)  // 큰 가격
+            }
+        };
         // 가격 차트 그리드 라인
         for i in 0..=10 {
             let y = top_margin + (price_chart_height * (i as f32 / 10.0));
@@ -1822,7 +1832,7 @@ impl<Message> Program<Message> for Chart {
             );
 
             frame.fill_text(canvas::Text {
-                content: format!("{:.0}", price),
+                content: price_format(price),
                 position: Point::new(5.0, y - 5.0),
                 color: Color::from_rgb(0.7, 0.7, 0.7),
                 size: Pixels(10.0),
@@ -1842,7 +1852,7 @@ impl<Message> Program<Message> for Chart {
             .map(|(ts, candle)| (*ts, candle))
             .collect();
         // visible_candlesticks 그리기 이후에 다음 코드 추가
-
+   
         // 이동평균선 그리기
         if self.show_ma5 {
             let ma_points: Vec<Point> = visible_candlesticks
