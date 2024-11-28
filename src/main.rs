@@ -1049,22 +1049,31 @@ impl RTarde {
             Message::UpdateAveragePrice(symbol, price) => {
                 self.average_prices.insert(symbol, price);
             }
-
             Message::MarketBuy => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
                     let price = info.price;
-                    // 5 USDT 상당의 코인 수량으로 변경
-                    let amount = 5.0 / price;
+                    let fee_rate = 0.001; // 0.1% 수수료
+                    let min_notional = 10.0; // 최소 주문 금액을 10 USDT로 설정
+                    
+                    // 수수료를 고려하여 실제 사용할 수 있는 USDT 계산
+                    let available_usdt = min_notional / (1.0 + fee_rate);
+                    
+                    // 수수료를 제외한 금액으로 살 수 있는 코인 수량 계산
+                    let calculated_amount = available_usdt / price;
+                    let actual_usdt = calculated_amount * price;
+                    let fee_amount = actual_usdt * fee_rate;
+                    let total_cost = actual_usdt + fee_amount;
+                    
                     let selected_coin = self.selected_coin.clone();
                     let alert_sender = self.alert_sender.clone();
-
+            
                     let runtime = tokio::runtime::Handle::current();
                     runtime.spawn(async move {
                         if let Err(e) = execute_trade(
                             selected_coin,
                             TradeType::Buy,
                             price,
-                            amount,
+                            calculated_amount,
                             alert_sender,
                         )
                         .await
@@ -1072,11 +1081,15 @@ impl RTarde {
                             println!("시장가 매수 실패: {:?}", e);
                         }
                     });
-
+            
                     self.add_alert(
                         format!(
-                            "시장가 매수 시도: 5 USDT (수량: {:.8} {})",
-                            amount, self.selected_coin
+                            "시장가 매수 시도:\n수량: {:.4} {}\n코인가격: {:.4} USDT\n수수료: {:.4} USDT\n총비용: {:.4} USDT",
+                            calculated_amount, 
+                            self.selected_coin,
+                            actual_usdt,
+                            fee_amount,
+                            total_cost
                         ),
                         AlertType::Info,
                     );
