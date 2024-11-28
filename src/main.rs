@@ -308,26 +308,47 @@ fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
         let (tx, mut rx) = mpsc::channel(100);
         let mut current_coin = "btcusdt".to_string();
-        let mut last_prices: HashMap<String, f64> = HashMap::new();  // 이전 가격 저장용
+        let mut current_mode = TradingMode::Spot;
+        let mut last_prices: HashMap<String, f64> = HashMap::new();
 
         yield Message::WebSocketInit(tx.clone());
 
         loop {
-            let url = Url::parse(&format!(
-                "wss://stream.binance.com:9443/ws/{}@trade",
-                current_coin.to_lowercase()
-            )).unwrap();
+            // 스트림 URL을 거래 모드에 따라 동적으로 생성
+            let url = match current_mode {
+                TradingMode::Spot => format!(
+                    "wss://stream.binance.com:9443/ws/{}@trade",
+                    current_coin.to_lowercase()
+                ),
+                TradingMode::Futures => format!(
+                    "wss://fstream.binance.com/ws/{}@trade",
+                    current_coin.to_lowercase()
+                ),
+            };
+
+            let url = Url::parse(&url).unwrap();
 
             match connect_async(url).await {
                 Ok((mut ws_stream, _)) => {
-                    println!("Connected to {}", current_coin);
+                    println!("Connected to {} in {:?} mode", current_coin, current_mode);
 
                     loop {
                         tokio::select! {
-                            Some(new_coin) = rx.next() => {
-                                println!("Switching to coin: {}", new_coin);
-                                current_coin = format!("{}usdt", new_coin.to_lowercase());
-                                break;
+                            Some(msg) = rx.next() => {
+                                if msg.starts_with("MODE:") {
+                                    // 모드 변경 메시지 처리
+                                    current_mode = if msg == "MODE:SPOT" {
+                                        TradingMode::Spot
+                                    } else {
+                                        TradingMode::Futures
+                                    };
+                                    break;
+                                } else {
+                                    // 코인 변경 메시지 처리
+                                    println!("Switching to coin: {}", msg);
+                                    current_coin = format!("{}usdt", msg.to_lowercase());
+                                    break;
+                                }
                             }
                             Some(msg) = ws_stream.next() => {
                                 match msg {
@@ -335,7 +356,6 @@ fn binance_connection() -> impl Stream<Item = Message> {
                                         if let Ok(trade) = serde_json::from_str::<BinanceTrade>(&text) {
                                             let symbol = trade.s.replace("USDT", "");
                                             if let Ok(price) = trade.p.parse::<f64>() {
-                                                // 변동률 계산
                                                 let prev_price = *last_prices.get(&symbol).unwrap_or(&price);
                                                 let change_percent = if prev_price != 0.0 {
                                                     ((price - prev_price) / prev_price) * 100.0
@@ -343,7 +363,6 @@ fn binance_connection() -> impl Stream<Item = Message> {
                                                     0.0
                                                 };
 
-                                                // 현재 가격을 이전 가격으로 저장
                                                 last_prices.insert(symbol.clone(), price);
 
                                                 yield Message::UpdatePrice(
@@ -376,7 +395,9 @@ fn binance_connection() -> impl Stream<Item = Message> {
     }
 }
 async fn get_top_volume_pairs(mode: TradingMode) -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
-    // 모드에 따라 다른 API 엔드포인트 사용
+    // print mode when function is called
+    println!("Fetching pairs for mode: {:?}", mode);
+
     let url = match mode {
         TradingMode::Spot => "https://api.binance.com/api/v3/ticker/24hr",
         TradingMode::Futures => "https://fapi.binance.com/fapi/v1/ticker/24hr",
@@ -384,15 +405,23 @@ async fn get_top_volume_pairs(mode: TradingMode) -> Result<Vec<(String, f64)>, B
     
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
+    
+    // Print the response status
+    println!("Response status: {}", response.status());
+
     let data: Vec<serde_json::Value> = response.json().await?;
+    
+    // Print the number of pairs received
+    println!("Total pairs received: {}", data.len());
     
     // USDT 마켓만 필터링하고 거래량으로 정렬
     let mut pairs: Vec<(String, f64)> = data
         .into_iter()
         .filter(|item| {
-            item["symbol"].as_str()
-                .map(|s| s.ends_with("USDT"))
-                .unwrap_or(false)
+            let symbol = item["symbol"].as_str().unwrap_or("");
+            let has_usdt = symbol.ends_with("USDT");
+            println!("Checking symbol: {} - Has USDT: {}", symbol, has_usdt);
+            has_usdt
         })
         .filter_map(|item| {
             let symbol = item["symbol"].as_str()?.to_string();
@@ -400,6 +429,9 @@ async fn get_top_volume_pairs(mode: TradingMode) -> Result<Vec<(String, f64)>, B
                 TradingMode::Spot => item["quoteVolume"].as_str()?,
                 TradingMode::Futures => item["volume"].as_str()?,
             }.parse::<f64>().ok()?;
+            
+            // Print each valid pair and its volume
+            println!("Valid pair found: {} with volume: {}", symbol, volume);
             Some((symbol, volume))
         })
         .collect();
@@ -407,9 +439,15 @@ async fn get_top_volume_pairs(mode: TradingMode) -> Result<Vec<(String, f64)>, B
     // 거래량 기준으로 내림차순 정렬
     pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     
-    // 상위 20개만 반환
-    Ok(pairs.into_iter().take(20).collect())
+    // 상위 20개만 유지
+    pairs.truncate(20);
+    
+    // Print final pairs
+    println!("Final pairs selected: {:?}", pairs);
+    
+    Ok(pairs)
 }
+
 async fn get_exchange_info(symbol: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let url = format!("https://fapi.binance.com/fapi/v1/exchangeInfo");
     let response = reqwest::Client::new().get(&url).send().await?;
@@ -1105,37 +1143,37 @@ impl RTarde {
                             ),
                     ),
             ));
-            let mode_toggle = Container::new(
-                Row::new()
-                    .spacing(10)
-                    .push(
-                        button(Text::new("Spot"))
-                            // .style(if self.trading_mode == TradingMode::Spot {
-                            //     theme::Button::Primary
-                            // } else {
-                            //     theme::Button::Secondary
-                            // })
-                            .on_press(Message::ToggleTradingMode(TradingMode::Spot)),
-                    )
-                    .push(
-                        button(Text::new("Futures"))
-                            // .style(if self.trading_mode == TradingMode::Futures {
-                            //     theme::Button::Primary
-                            // } else {
-                            //     theme::Button::Secondary
-                            // })
-                            .on_press(Message::ToggleTradingMode(TradingMode::Futures)),
-                    ),
+            let trading_modes = vec![TradingMode::Spot, TradingMode::Futures];
+            let trading_mode_strings: Vec<String> = trading_modes
+                .iter()
+                .map(|mode| match mode {
+                    TradingMode::Spot => "Spot".to_string(),
+                    TradingMode::Futures => "Futures".to_string(),
+                })
+                .collect();
+            
+            let mode_picker = pick_list(
+                trading_mode_strings,
+                Some(match self.trading_mode {
+                    TradingMode::Spot => "Spot".to_string(),
+                    TradingMode::Futures => "Futures".to_string(),
+                }),
+                |selected| {
+                    let mode = match selected.as_str() {
+                        "Spot" => TradingMode::Spot,
+                        "Futures" => TradingMode::Futures,
+                        _ => TradingMode::Spot,
+                    };
+                    Message::ToggleTradingMode(mode)
+                },
             )
-            .padding(10)
-            .width(Length::Fill);
-        //메인
+            .width(Length::Fixed(100.0));
 
         Column::new()
             // .spacing(20)
             .push(
                 Row::new()
-                    .push(mode_toggle.width(FillPortion(2)))
+                    .push(mode_picker.width(FillPortion(2)))
                     .push(coin_picker.width(FillPortion(1)))
                     .push(candle_type_picker.width(FillPortion(1)))
                     .push(ma_controls.width(FillPortion(8)))
@@ -1159,6 +1197,17 @@ impl RTarde {
                     TradingMode::Futures => "선물",
                 };
             
+                // 웹소켓 모드 변경 메시지 전송
+                if let Some(sender) = &self.ws_sender {
+                    let mode_msg = match mode {
+                        TradingMode::Spot => "MODE:SPOT",
+                        TradingMode::Futures => "MODE:FUTURES",
+                    };
+                    if let Err(e) = sender.clone().try_send(mode_msg.to_string()) {
+                        println!("Error sending mode change: {:?}", e);
+                    }
+                }
+            
                 // 모드 변경 시 코인 리스트 업데이트
                 let runtime = tokio::runtime::Handle::current();
                 let result = runtime.block_on(async {
@@ -1167,21 +1216,101 @@ impl RTarde {
             
                 match result {
                     Ok(pairs) => {
+                        // 코인 리스트 초기화
                         self.coin_list.clear();
-                        for (symbol, _volume) in pairs {
-                            let symbol = symbol.strip_suffix("USDT").unwrap_or(&symbol);
+                        
+                        // 가격 정보 초기화
+                        for (symbol, volume) in pairs {
+                            let clean_symbol = symbol.strip_suffix("USDT").unwrap_or(&symbol).to_string();
+                            
+                            // 각 코인의 현재 가격 정보 가져오기
+                            let price_result = runtime.block_on(async {
+                                let url = match mode {
+                                    TradingMode::Spot => format!(
+                                        "https://api.binance.com/api/v3/ticker/price?symbol={}",
+                                        format!("{}USDT", clean_symbol)
+                                    ),
+                                    TradingMode::Futures => format!(
+                                        "https://fapi.binance.com/fapi/v1/ticker/price?symbol={}",
+                                        format!("{}USDT", clean_symbol)
+                                    ),
+                                };
+                                
+                                reqwest::Client::new()
+                                    .get(&url)
+                                    .send()
+                                    .await?
+                                    .json::<serde_json::Value>()
+                                    .await
+                            });
+            
+                            let current_price = match price_result {
+                                Ok(price_data) => {
+                                    price_data["price"]
+                                        .as_str()
+                                        .and_then(|p| p.parse::<f64>().ok())
+                                        .unwrap_or(0.0)
+                                }
+                                Err(_) => 0.0,
+                            };
+            
                             self.coin_list.insert(
-                                symbol.to_string(),
+                                clean_symbol.clone(),
                                 CoinInfo {
-                                    symbol: format!("{}-USDT", symbol),
-                                    name: symbol.to_string(),
-                                    price: 0.0,
+                                    symbol: format!("{}-USDT", clean_symbol),
+                                    name: clean_symbol.clone(),
+                                    price: current_price,
                                 },
                             );
+            
+                            // BTC가 아닌 경우에도 캔들스틱 데이터 미리 가져오기
+                            if clean_symbol != "BTC" {
+                                if let Err(e) = fetch_candles(
+                                    &format!("USDT-{}", clean_symbol),
+                                    &self.selected_candle_type,
+                                    None,
+                                    self.trading_mode
+                                ) {
+                                    println!("Error pre-fetching candles for {}: {:?}", clean_symbol, e);
+                                }
+                            }
+                        }
+            
+                        // BTC로 초기화 및 데이터 로드
+                        self.selected_coin = "BTC".to_string();
+                        
+                        // 웹소켓 구독 업데이트
+                        if let Some(sender) = &self.ws_sender {
+                            if let Err(e) = sender.clone().try_send("BTC".to_string()) {
+                                println!("Error sending coin update after mode change: {:?}", e);
+                            }
+                        }
+            
+                        // BTC 캔들스틱 데이터 로드
+                        match fetch_candles(
+                            "USDT-BTC",
+                            &self.selected_candle_type,
+                            None,
+                            self.trading_mode
+                        ) {
+                            Ok(candles) => {
+                                println!("Successfully loaded {} candles for BTC", candles.len());
+                                self.candlesticks = candles;
+                                if self.knn_enabled {
+                                    let (buy_signals, sell_signals) = calculate_knn_signals(&self.candlesticks, false);
+                                    self.knn_buy_signals = buy_signals;
+                                    self.knn_sell_signals = sell_signals;
+                                }
+                            }
+                            Err(e) => {
+                                println!("Error fetching BTC candles after mode change: {:?}", e);
+                                self.add_alert("BTC 캔들스틱 데이터 로드 실패".to_string(), AlertType::Error);
+                            }
                         }
                     }
                     Err(e) => {
                         println!("Error fetching top pairs: {}", e);
+                        self.add_alert("상위 거래량 페어 로드 실패".to_string(), AlertType::Error);
                     }
                 }
             
