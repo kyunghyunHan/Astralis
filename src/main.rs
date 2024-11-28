@@ -1110,47 +1110,83 @@ impl RTarde {
             Message::MarketBuy => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
                     let price = info.price;
-                    let fee_rate = 0.001; // 0.1% 수수료
-                    let min_notional = 10.0; // 최소 주문 금액을 10 USDT로 설정
-                    
-                    // 수수료를 고려하여 실제 사용할 수 있는 USDT 계산
-                    let available_usdt = min_notional / (1.0 + fee_rate);
-                    
-                    // 수수료를 제외한 금액으로 살 수 있는 코인 수량 계산
-                    let calculated_amount = available_usdt / price;
-                    let actual_usdt = calculated_amount * price;
-                    let fee_amount = actual_usdt * fee_rate;
-                    let total_cost = actual_usdt + fee_amount;
-                    
+                    let fee_rate = 0.001;
+                    let target_usdt = 10.0;
+                    let available_usdt = target_usdt / (1.0 + fee_rate);
                     let selected_coin = self.selected_coin.clone();
-                    let alert_sender = self.alert_sender.clone();
+                    let mut alert_sender = self.alert_sender.clone();  // mut 추가
             
                     let runtime = tokio::runtime::Handle::current();
                     runtime.spawn(async move {
-                        if let Err(e) = execute_trade(
-                            selected_coin,
-                            TradeType::Buy,
-                            price,
-                            calculated_amount,
-                            alert_sender,
-                        )
-                        .await
-                        {
-                            println!("시장가 매수 실패: {:?}", e);
+                        let result: Result<(), String> = async {
+                            let exchange_info = get_exchange_info(&format!("{}USDT", selected_coin))
+                                .await
+                                .map_err(|e| e.to_string())?;
+                          
+                            let symbol_info = exchange_info["symbols"]
+                                .as_array()
+                                .and_then(|symbols| symbols.iter().find(|s| s["symbol"].as_str() == Some(&format!("{}USDT", selected_coin))))
+                                .ok_or_else(|| "Symbol not found".to_string())?;
+            
+                            let lot_size = symbol_info["filters"]
+                                .as_array()
+                                .and_then(|filters| filters.iter().find(|f| f["filterType"] == "LOT_SIZE"))
+                                .ok_or_else(|| "LOT_SIZE filter not found".to_string())?;
+            
+                            let step_size = lot_size["stepSize"]
+                                .as_str()
+                                .unwrap_or("1.0")
+                                .parse::<f64>()
+                                .map_err(|e| e.to_string())?;
+            
+                            let precision = -step_size.log10().ceil() as i32;
+                            let scale = 10f64.powi(precision);
+                            let amt = available_usdt / price;
+                            let calculated_amount = (amt * scale).round() / scale;
+            
+                            let actual_cost = calculated_amount * price;
+                            let fee_amount = actual_cost * fee_rate;
+                            let total_cost = actual_cost + fee_amount;
+            
+                            execute_trade(
+                                selected_coin.clone(),
+                                TradeType::Buy,
+                                price,
+                                calculated_amount,
+                                alert_sender.clone(),
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?;
+            
+                            alert_sender
+                                .send((
+                                    format!(
+                                        "시장가 매수 성공:\n코인: {}\n수량: {:.8} {}\n예상비용: {:.4} USDT\n수수료: {:.4} USDT\n총비용: {:.4} USDT",
+                                        selected_coin,
+                                        calculated_amount,
+                                        selected_coin,
+                                        actual_cost,
+                                        fee_amount,
+                                        total_cost
+                                    ),
+                                    AlertType::Info,
+                                ))
+                                .await
+                                .map_err(|e| e.to_string())?;
+            
+                            Ok(())
+                        }
+                        .await;
+            
+                        if let Err(e) = result {
+                            if let Err(send_err) = alert_sender
+                                .send((format!("거래 실패: {}", e), AlertType::Error))
+                                .await
+                            {
+                                println!("알림 전송 실패: {:?}", send_err);
+                            }
                         }
                     });
-            
-                    self.add_alert(
-                        format!(
-                            "시장가 매수 시도:\n수량: {:.4} {}\n코인가격: {:.4} USDT\n수수료: {:.4} USDT\n총비용: {:.4} USDT",
-                            calculated_amount, 
-                            self.selected_coin,
-                            actual_usdt,
-                            fee_amount,
-                            total_cost
-                        ),
-                        AlertType::Info,
-                    );
                 }
             }
             Message::MarketSell => {
