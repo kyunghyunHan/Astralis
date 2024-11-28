@@ -297,24 +297,24 @@ fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
         let (tx, mut rx) = mpsc::channel(100);
         let mut current_coin = "btcusdt".to_string();
-        let mut last_prices: HashMap<String, f64> = HashMap::new();  // 이전 가격 저장용
+        let mut last_prices: HashMap<String, f64> = HashMap::new();
 
         yield Message::WebSocketInit(tx.clone());
 
         loop {
             let url = Url::parse(&format!(
-                "wss://stream.binance.com:9443/ws/{}@trade",
+                "wss://fstream.binance.com/ws/{}@trade",  // Changed to fstream for futures
                 current_coin.to_lowercase()
             )).unwrap();
 
             match connect_async(url).await {
                 Ok((mut ws_stream, _)) => {
-                    println!("Connected to {}", current_coin);
+                    println!("Connected to futures stream for {}", current_coin);
 
                     loop {
                         tokio::select! {
                             Some(new_coin) = rx.next() => {
-                                println!("Switching to coin: {}", new_coin);
+                                println!("Switching to futures coin: {}", new_coin);
                                 current_coin = format!("{}usdt", new_coin.to_lowercase());
                                 break;
                             }
@@ -324,7 +324,6 @@ fn binance_connection() -> impl Stream<Item = Message> {
                                         if let Ok(trade) = serde_json::from_str::<BinanceTrade>(&text) {
                                             let symbol = trade.s.replace("USDT", "");
                                             if let Ok(price) = trade.p.parse::<f64>() {
-                                                // 변동률 계산
                                                 let prev_price = *last_prices.get(&symbol).unwrap_or(&price);
                                                 let change_percent = if prev_price != 0.0 {
                                                     ((price - prev_price) / prev_price) * 100.0
@@ -332,7 +331,6 @@ fn binance_connection() -> impl Stream<Item = Message> {
                                                     0.0
                                                 };
 
-                                                // 현재 가격을 이전 가격으로 저장
                                                 last_prices.insert(symbol.clone(), price);
 
                                                 yield Message::UpdatePrice(
@@ -345,7 +343,7 @@ fn binance_connection() -> impl Stream<Item = Message> {
                                         }
                                     }
                                     Err(e) => {
-                                        println!("WebSocket error: {}", e);
+                                        println!("Futures WebSocket error: {}", e);
                                         break;
                                     }
                                     _ => {}
@@ -356,7 +354,7 @@ fn binance_connection() -> impl Stream<Item = Message> {
                     let _ = ws_stream.close(None).await;
                 }
                 Err(e) => {
-                    println!("Connection error: {}", e);
+                    println!("Futures connection error: {}", e);
                     yield Message::Error;
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
@@ -365,13 +363,12 @@ fn binance_connection() -> impl Stream<Item = Message> {
     }
 }
 async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
-    let url = "https://api.binance.com/api/v3/ticker/24hr";
+    let url = "https://fapi.binance.com/fapi/v1/ticker/24hr";
     
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
     let data: Vec<serde_json::Value> = response.json().await?;
     
-    // USDT 마켓만 필터링하고 거래량으로 정렬
     let mut pairs: Vec<(String, f64)> = data
         .into_iter()
         .filter(|item| {
@@ -386,10 +383,8 @@ async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error
         })
         .collect();
     
-    // 거래량 기준으로 내림차순 정렬
     pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     
-    // 상위 20개만 반환
     Ok(pairs.into_iter().take(20).collect())
 }
 
@@ -410,54 +405,6 @@ async fn execute_trade(
     let api_secret = env::var("BINANCE_API_SECRET")?;
 
     let symbol = format!("{}USDT", selected_coin);
-
-    // 거래 규칙 정보 가져오기
-    let exchange_info = get_exchange_info(&symbol).await?;
-
-    // LOT_SIZE 필터 찾기
-    let symbol_info = exchange_info["symbols"]
-        .as_array()
-        .ok_or("No symbols found")?
-        .iter()
-        .find(|s| s["symbol"].as_str() == Some(&symbol))
-        .ok_or("Symbol not found")?;
-
-    let lot_size_filter = symbol_info["filters"]
-        .as_array()
-        .ok_or("No filters found")?
-        .iter()
-        .find(|f| f["filterType"].as_str() == Some("LOT_SIZE"))
-        .ok_or("LOT_SIZE filter not found")?;
-
-    let min_qty = lot_size_filter["minQty"]
-        .as_str()
-        .unwrap_or("0.00100")
-        .parse::<f64>()?;
-    let step_size = lot_size_filter["stepSize"]
-        .as_str()
-        .unwrap_or("0.00100")
-        .parse::<f64>()?;
-
-    // 수량을 step size에 맞게 조정
-    let decimal_places = (step_size.log10() * -1.0).ceil() as i32;
-    let adjusted_amount = (amount / step_size).floor() * step_size;
-
-    // 최소 수량 체크
-    if adjusted_amount < min_qty {
-        alert_sender
-            .send((
-                format!(
-                    "주문 실패: 최소 주문 수량은 {} {}입니다",
-                    min_qty, selected_coin
-                ),
-                AlertType::Error,
-            ))
-            .await?;
-        return Err("Amount too small".into());
-    }
-
-    let formatted_quantity = format!("{:.*}", decimal_places as usize, adjusted_amount);
-
     let timestamp = chrono::Utc::now().timestamp_millis();
 
     let side = match trade_type {
@@ -467,38 +414,30 @@ async fn execute_trade(
 
     let params = format!(
         "symbol={}&side={}&type=MARKET&quantity={}&timestamp={}",
-        symbol, side, formatted_quantity, timestamp
+        symbol, side, amount, timestamp
     );
-    println!("{}", amount);
-    // HMAC-SHA256 시그니처 생성
-    let signature = hmac_sha256(&api_secret, &params);
 
-    // 선물 API 엔드포인트 URL 구성
+    let signature = hmac_sha256(&api_secret, &params);
     let url = format!(
-        "https://api.binance.com/api/v3/order?{}&signature={}",
+        "https://fapi.binance.com/fapi/v1/order?{}&signature={}",
         params, signature
     );
 
-    // HTTP 클라이언트 생성
     let client = reqwest::Client::new();
-
-    // POST 요청 실행
     let response = client
         .post(&url)
         .header("X-MBX-APIKEY", &api_key)
         .send()
         .await?;
 
-    // 응답 처리
     if response.status().is_success() {
         let result = response.json::<serde_json::Value>().await?;
-
-        // 주문 성공 알림 전송
+        
         let message = format!(
             "{} 주문 성공:\n수량: {:.8} {}\n가격: {:.2} USDT",
             match trade_type {
-                TradeType::Buy => "매수",
-                TradeType::Sell => "매도",
+                TradeType::Buy => "롱",
+                TradeType::Sell => "숏",
             },
             amount,
             selected_coin,
@@ -515,18 +454,12 @@ async fn execute_trade(
             ))
             .await?;
 
-        println!("Response: {:?}", result); // 응답 내용 출력
         Ok(())
     } else {
-        // 에러 응답 처리
         let error_msg = response.text().await?;
-        println!("Error response: {}", error_msg); // 에러 내용 출력
-
-        // 에러 알림 전송
         alert_sender
             .send((format!("주문 실패: {}", error_msg), AlertType::Error))
             .await?;
-
         Err(error_msg.into())
     }
 }
@@ -555,9 +488,8 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
             let query = format!("timestamp={}", timestamp);
             let signature = hmac_sha256(&api_secret, &query);
 
-            // 계정 정보 가져오기 (기존)
             let account_url = format!(
-                "https://api.binance.com/api/v3/account?{}&signature={}",
+                "https://fapi.binance.com/fapi/v2/account?{}&signature={}",
                 query, signature
             );
 
@@ -568,7 +500,6 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
                 .await
             {
                 if let Ok(account_info) = response.json::<AccountInfo>().await {
-                    // 보유한 코인에 대해 거래 내역 조회
                     for balance in &account_info.balances {
                         if balance.free.parse::<f64>().unwrap_or(0.0) > 0.0 {
                             let symbol = format!("{}USDT", balance.asset);
@@ -576,7 +507,7 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
                             let trades_signature = hmac_sha256(&api_secret, &trades_query);
 
                             let trades_url = format!(
-                                "https://api.binance.com/api/v3/myTrades?{}&signature={}",
+                                "https://fapi.binance.com/fapi/v1/userTrades?{}&signature={}",
                                 trades_query, trades_signature
                             );
 
@@ -587,7 +518,6 @@ fn binance_account_connection() -> impl Stream<Item = Message> {
                                 .await
                             {
                                 if let Ok(trades) = trades_response.json::<Vec<Trade>>().await {
-                                    // 매수 평균가 계산
                                     let mut total_buy_amount = 0.0;
                                     let mut total_buy_quantity = 0.0;
 
@@ -2499,7 +2429,6 @@ async fn fetch_candles_async(
         CandleType::Minute3 => 1000,
     };
 
-    // market 형식 변환 (KRW-BTC -> BTCUSDT)
     let binance_symbol = match market.split('-').last() {
         Some(symbol) => format!("{}USDT", symbol),
         None => "BTCUSDT".to_string(),
@@ -2512,7 +2441,7 @@ async fn fetch_candles_async(
     };
 
     let url = format!(
-        "https://api.binance.com/api/v3/klines?symbol={}&interval={}&limit={}",
+        "https://fapi.binance.com/fapi/v1/klines?symbol={}&interval={}&limit={}",
         binance_symbol, interval, count
     );
 
