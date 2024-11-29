@@ -239,15 +239,18 @@ struct BinanceCandle {
 }
 #[derive(Debug, Deserialize, Clone)]
 pub struct BinanceTrade {
-    pub e: String, // Event type
-    pub E: i64,    // Event time
-    pub s: String, // Symbol
-    pub t: i64,    // Trade ID
-    pub p: String, // Price
-    pub q: String, // Quantity
-    pub T: i64,    // Trade time
-    pub m: bool,   // Is the buyer the market maker?
-    pub M: bool,   // Ignore
+    #[serde(rename = "E")]
+    pub event_time: i64,
+    #[serde(rename = "s")]
+    pub symbol: String,
+    #[serde(rename = "p")]
+    pub price: String,
+    #[serde(rename = "q")]
+    pub quantity: String,
+    #[serde(rename = "T")]
+    pub transaction_time: i64,
+    #[serde(rename = "m")]
+    pub is_buyer_maker: bool,
 }
 // 거래 지표 정보를 담는 구조체
 #[derive(Debug, Clone)]
@@ -303,7 +306,7 @@ fn binance_connection() -> impl Stream<Item = Message> {
 
         loop {
             let url = Url::parse(&format!(
-                "wss://fstream.binance.com/ws/{}@trade",  // Changed to fstream for futures
+                "wss://fstream.binance.com/ws/{}@aggTrade",  // @trade를 @aggTrade로 변경
                 current_coin.to_lowercase()
             )).unwrap();
 
@@ -321,9 +324,11 @@ fn binance_connection() -> impl Stream<Item = Message> {
                             Some(msg) = ws_stream.next() => {
                                 match msg {
                                     Ok(ME::Text(text)) => {
+                                        // println!("Received message: {}", text);  // 디버그용
                                         if let Ok(trade) = serde_json::from_str::<BinanceTrade>(&text) {
-                                            let symbol = trade.s.replace("USDT", "");
-                                            if let Ok(price) = trade.p.parse::<f64>() {
+                                            let symbol = trade.symbol.replace("USDT", "");
+                                            
+                                            if let Ok(price) = trade.price.parse::<f64>() {
                                                 let prev_price = *last_prices.get(&symbol).unwrap_or(&price);
                                                 let change_percent = if prev_price != 0.0 {
                                                     ((price - prev_price) / prev_price) * 100.0
@@ -332,13 +337,17 @@ fn binance_connection() -> impl Stream<Item = Message> {
                                                 };
 
                                                 last_prices.insert(symbol.clone(), price);
+                                                // println!("Price update: {} -> {}", symbol, price);  // 디버그용
 
                                                 yield Message::UpdatePrice(
                                                     symbol.clone(),
                                                     price,
                                                     change_percent
                                                 );
-                                                yield Message::AddCandlestick((trade.T as u64, trade));
+                                                yield Message::AddCandlestick((
+                                                    trade.transaction_time as u64,
+                                                    trade.clone()
+                                                ));
                                             }
                                         }
                                     }
@@ -463,92 +472,129 @@ async fn execute_trade(
         Err(error_msg.into())
     }
 }
-fn binance_account_connection() -> impl Stream<Item = Message> {
-    stream! {
-        let api_key = match env::var("BINANCE_API_KEY") {
-            Ok(key) => key,
-            Err(_) => {
-                yield Message::FetchError("API KEY not found".to_string());
-                return;
-            }
-        };
-
-        let api_secret = match env::var("BINANCE_API_SECRET") {
-            Ok(secret) => secret,
-            Err(_) => {
-                yield Message::FetchError("API SECRET not found".to_string());
-                return;
-            }
-        };
-
-        let client = reqwest::Client::new();
-
-        loop {
-            let timestamp = chrono::Utc::now().timestamp_millis();
-            let query = format!("timestamp={}", timestamp);
-            let signature = hmac_sha256(&api_secret, &query);
-
-            let account_url = format!(
-                "https://fapi.binance.com/fapi/v2/account?{}&signature={}",
-                query, signature
-            );
-
-            if let Ok(response) = client
-                .get(&account_url)
-                .header("X-MBX-APIKEY", &api_key)
-                .send()
-                .await
-            {
-                if let Ok(account_info) = response.json::<AccountInfo>().await {
-                    for balance in &account_info.balances {
-                        if balance.free.parse::<f64>().unwrap_or(0.0) > 0.0 {
-                            let symbol = format!("{}USDT", balance.asset);
-                            let trades_query = format!("symbol={}&timestamp={}", symbol, timestamp);
-                            let trades_signature = hmac_sha256(&api_secret, &trades_query);
-
-                            let trades_url = format!(
-                                "https://fapi.binance.com/fapi/v1/userTrades?{}&signature={}",
-                                trades_query, trades_signature
+    fn binance_account_connection() -> impl Stream<Item = Message> {
+        stream! {
+            let api_key = match env::var("BINANCE_API_KEY") {
+                Ok(key) => key,
+                Err(_) => {
+                    yield Message::FetchError("API KEY not found".to_string());
+                    return;
+                }
+            };
+    
+            let api_secret = match env::var("BINANCE_API_SECRET") {
+                Ok(secret) => secret,
+                Err(_) => {
+                    yield Message::FetchError("API SECRET not found".to_string());
+                    return;
+                }
+            };
+    
+            let client = reqwest::Client::new();
+    
+            loop {
+                let timestamp = chrono::Utc::now().timestamp_millis();
+                
+                // 계정 정보 요청
+                let account_query = format!("timestamp={}", timestamp);
+                let account_signature = hmac_sha256(&api_secret, &account_query);
+                let account_url = format!(
+                    "https://fapi.binance.com/fapi/v2/account?{}&signature={}",
+                    account_query, account_signature
+                );
+    
+                println!("Fetching account info...");  // 디버그 로그
+    
+                match client
+                    .get(&account_url)
+                    .header("X-MBX-APIKEY", &api_key)
+                    .send()
+                    .await
+                {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            println!("Account API error: {}", response.status());  // 에러 로그
+                            if let Ok(error_text) = response.text().await {
+                                println!("Error details: {}", error_text);
+                            }
+                        } else if let Ok(account_info) = response.json::<AccountInfo>().await {
+                            println!("Account info received");  // 성공 로그
+                            
+                            // 포지션 정보 요청
+                            let position_query = format!("timestamp={}", timestamp);
+                            let position_signature = hmac_sha256(&api_secret, &position_query);
+                            let position_url = format!(
+                                "https://fapi.binance.com/fapi/v2/positionRisk?{}&signature={}",
+                                position_query, position_signature
                             );
-
-                            if let Ok(trades_response) = client
-                                .get(&trades_url)
+    
+                            if let Ok(position_response) = client
+                                .get(&position_url)
                                 .header("X-MBX-APIKEY", &api_key)
                                 .send()
                                 .await
                             {
-                                if let Ok(trades) = trades_response.json::<Vec<Trade>>().await {
-                                    let mut total_buy_amount = 0.0;
-                                    let mut total_buy_quantity = 0.0;
-
-                                    for trade in trades {
-                                        if trade.is_buyer {
-                                            let price = trade.price.parse::<f64>().unwrap_or(0.0);
-                                            let quantity = trade.qty.parse::<f64>().unwrap_or(0.0);
-                                            total_buy_amount += price * quantity;
-                                            total_buy_quantity += quantity;
+                                if let Ok(positions) = position_response.json::<Vec<Position>>().await {
+                                    // 포지션이 있는 심볼들에 대해서만 거래 내역 조회
+                                    for position in &positions {
+                                        if position.position_amt.parse::<f64>().unwrap_or(0.0) != 0.0 {
+                                            let trades_query = format!(
+                                                "symbol={}&limit=100&timestamp={}", 
+                                                position.symbol, 
+                                                timestamp
+                                            );
+                                            let trades_signature = hmac_sha256(&api_secret, &trades_query);
+                                            let trades_url = format!(
+                                                "https://fapi.binance.com/fapi/v1/userTrades?{}&signature={}",
+                                                trades_query, trades_signature
+                                            );
+    
+                                            if let Ok(trades_response) = client
+                                                .get(&trades_url)
+                                                .header("X-MBX-APIKEY", &api_key)
+                                                .send()
+                                                .await
+                                            {
+                                                if let Ok(trades) = trades_response.json::<Vec<Trade>>().await {
+                                                    let mut total_buy_amount = 0.0;
+                                                    let mut total_buy_quantity = 0.0;
+    
+                                                    for trade in trades {
+                                                        if trade.is_buyer {
+                                                            let price = trade.price.parse::<f64>().unwrap_or(0.0);
+                                                            let quantity = trade.qty.parse::<f64>().unwrap_or(0.0);
+                                                            total_buy_amount += price * quantity;
+                                                            total_buy_quantity += quantity;
+                                                        }
+                                                    }
+    
+                                                    let avg_price = if total_buy_quantity > 0.0 {
+                                                        total_buy_amount / total_buy_quantity
+                                                    } else {
+                                                        0.0
+                                                    };
+    
+                                                    let symbol = position.symbol.replace("USDT", "");
+                                                    yield Message::UpdateAveragePrice(symbol, avg_price);
+                                                }
+                                            }
                                         }
                                     }
-
-                                    let avg_price = if total_buy_quantity > 0.0 {
-                                        total_buy_amount / total_buy_quantity
-                                    } else {
-                                        0.0
-                                    };
-
-                                    yield Message::UpdateAveragePrice(balance.asset.clone(), avg_price);
+                                    yield Message::UpdatePositions(positions);
                                 }
                             }
+                            yield Message::UpdateAccountInfo(account_info);
                         }
                     }
-                    yield Message::UpdateAccountInfo(account_info);
+                    Err(e) => {
+                        println!("Account request error: {}", e);  // 에러 로그
+                    }
                 }
+    
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
-
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     }
-}
 /*===============RTarde LINE================= */
 impl Default for RTarde {
     fn default() -> Self {
@@ -1487,7 +1533,7 @@ impl RTarde {
                 let (timestamp, trade_data) = trade;
                 let current_market = format!("{}USDT", self.selected_coin);
 
-                if trade_data.s != current_market {
+                if trade_data.symbol != current_market {
                     return;
                 }
 
@@ -1515,8 +1561,8 @@ impl RTarde {
                     CandleType::Day => current_timestamp - (current_timestamp % 86400000),
                 };
 
-                let trade_price = trade_data.p.parse::<f32>().unwrap_or_default();
-                let trade_volume = trade_data.q.parse::<f32>().unwrap_or_default();
+                let trade_price = trade_data.price.parse::<f32>().unwrap_or_default();
+                let trade_volume = trade_data.quantity.parse::<f32>().unwrap_or_default();
 
                 self.candlesticks
                     .entry(candle_timestamp)
