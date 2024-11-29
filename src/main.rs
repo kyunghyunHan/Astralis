@@ -47,7 +47,7 @@ struct RTarde {
     knn_prediction: Option<String>,       // "UP" 또는 "DOWN"
     knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
-    account_info: Option<AccountInfo>,
+    account_info: Option<FuturesAccountInfo>,
     positions: Vec<Position>,
     alerts: VecDeque<Alert>,
     alert_timeout: Option<Instant>,
@@ -112,7 +112,7 @@ pub enum Message {
         timestamp: u64,
         indicators: TradeIndicators,
     },
-    UpdateAccountInfo(AccountInfo),
+    UpdateAccountInfo(FuturesAccountInfo),
     UpdatePositions(Vec<Position>),
     FetchError(String),
     AddAlert(String, AlertType),
@@ -163,37 +163,92 @@ struct CoinInfo {
 }
 // 계정 정보를 위한 구조체들
 #[derive(Debug, Deserialize, Clone)]
-pub struct AccountInfo {
-    #[serde(rename = "makerCommission")]
-    maker_commission: i32,
-    #[serde(rename = "takerCommission")]
-    taker_commission: i32,
-    #[serde(rename = "buyerCommission")]
-    buyer_commission: i32,
-    #[serde(rename = "sellerCommission")]
-    seller_commission: i32,
-    #[serde(rename = "commissionRates")]
-    commission_rates: CommissionRates,
+pub struct FuturesAccountInfo {
+    #[serde(rename = "feeTier")]
+    fee_tier: i32,
     #[serde(rename = "canTrade")]
     can_trade: bool,
-    #[serde(rename = "canWithdraw")]
-    can_withdraw: bool,
     #[serde(rename = "canDeposit")]
     can_deposit: bool,
-    brokered: bool,
-    #[serde(rename = "requireSelfTradePrevention")]
-    require_self_trade_prevention: bool,
-    #[serde(rename = "preventSor")]
-    prevent_sor: bool,
+    #[serde(rename = "canWithdraw")]
+    can_withdraw: bool,
     #[serde(rename = "updateTime")]
     update_time: i64,
-    #[serde(rename = "accountType")]
-    account_type: String,
-    balances: Vec<Balance>,
-    permissions: Vec<String>,
-    uid: i64,
+    #[serde(rename = "totalInitialMargin")]
+    total_initial_margin: String,
+    #[serde(rename = "totalMaintMargin")]
+    total_maint_margin: String,
+    #[serde(rename = "totalWalletBalance")]
+    total_wallet_balance: String,
+    #[serde(rename = "totalUnrealizedProfit")]
+    total_unrealized_profit: String,
+    #[serde(rename = "totalMarginBalance")]
+    total_margin_balance: String,
+    #[serde(rename = "totalPositionInitialMargin")]
+    total_position_initial_margin: String,
+    #[serde(rename = "totalOpenOrderInitialMargin")]
+    total_open_order_initial_margin: String,
+    #[serde(rename = "totalCrossWalletBalance")]
+    total_cross_wallet_balance: String,
+    #[serde(rename = "totalCrossUnPnl")]
+    total_cross_un_pnl: String,
+    #[serde(rename = "availableBalance")]
+    available_balance: String,
+    #[serde(rename = "maxWithdrawAmount")]
+    max_withdraw_amount: String,
+    assets: Vec<FuturesAsset>,
+    positions: Vec<FuturesPosition>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct FuturesAsset {
+    asset: String,
+    #[serde(rename = "walletBalance")]
+    wallet_balance: String,
+    #[serde(rename = "unrealizedProfit")]
+    unrealized_profit: String,
+    #[serde(rename = "marginBalance")]
+    margin_balance: String,
+    #[serde(rename = "maintMargin")]
+    maint_margin: String,
+    #[serde(rename = "initialMargin")]
+    initial_margin: String,
+    #[serde(rename = "positionInitialMargin")]
+    position_initial_margin: String,
+    #[serde(rename = "openOrderInitialMargin")]
+    open_order_initial_margin: String,
+    #[serde(rename = "maxWithdrawAmount")]
+    max_withdraw_amount: String,
+    #[serde(rename = "crossWalletBalance")]
+    cross_wallet_balance: String,
+    #[serde(rename = "crossUnPnl")]
+    cross_un_pnl: String,
+    #[serde(rename = "availableBalance")]
+    available_balance: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FuturesPosition {
+    symbol: String,
+    #[serde(rename = "initialMargin")]
+    initial_margin: String,
+    #[serde(rename = "maintMargin")]
+    maint_margin: String,
+    #[serde(rename = "unrealizedProfit")]
+    unrealized_profit: String,
+    #[serde(rename = "positionInitialMargin")]
+    position_initial_margin: String,
+    leverage: String,
+    isolated: bool,
+    #[serde(rename = "entryPrice")]
+    entry_price: String,
+    #[serde(rename = "maxNotional")]
+    max_notional: String,
+    #[serde(rename = "positionSide")]
+    position_side: String,
+    #[serde(rename = "positionAmt")]
+    position_amt: String,
+}
 #[derive(Debug, Deserialize, Clone)]
 struct CommissionRates {
     maker: String,
@@ -472,129 +527,131 @@ async fn execute_trade(
         Err(error_msg.into())
     }
 }
-    fn binance_account_connection() -> impl Stream<Item = Message> {
-        stream! {
-            let api_key = match env::var("BINANCE_API_KEY") {
-                Ok(key) => key,
-                Err(_) => {
-                    yield Message::FetchError("API KEY not found".to_string());
-                    return;
-                }
-            };
-    
-            let api_secret = match env::var("BINANCE_API_SECRET") {
-                Ok(secret) => secret,
-                Err(_) => {
-                    yield Message::FetchError("API SECRET not found".to_string());
-                    return;
-                }
-            };
-    
-            let client = reqwest::Client::new();
-    
-            loop {
-                let timestamp = chrono::Utc::now().timestamp_millis();
-                
-                // 계정 정보 요청
-                let account_query = format!("timestamp={}", timestamp);
-                let account_signature = hmac_sha256(&api_secret, &account_query);
-                let account_url = format!(
-                    "https://fapi.binance.com/fapi/v2/account?{}&signature={}",
-                    account_query, account_signature
-                );
-    
-                println!("Fetching account info...");  // 디버그 로그
-    
-                match client
-                    .get(&account_url)
-                    .header("X-MBX-APIKEY", &api_key)
-                    .send()
-                    .await
-                {
-                    Ok(response) => {
-                        if !response.status().is_success() {
-                            println!("Account API error: {}", response.status());  // 에러 로그
-                            if let Ok(error_text) = response.text().await {
-                                println!("Error details: {}", error_text);
-                            }
-                        } else if let Ok(account_info) = response.json::<AccountInfo>().await {
-                            println!("Account info received");  // 성공 로그
-                            
-                            // 포지션 정보 요청
-                            let position_query = format!("timestamp={}", timestamp);
-                            let position_signature = hmac_sha256(&api_secret, &position_query);
-                            let position_url = format!(
-                                "https://fapi.binance.com/fapi/v2/positionRisk?{}&signature={}",
-                                position_query, position_signature
-                            );
-    
-                            if let Ok(position_response) = client
-                                .get(&position_url)
-                                .header("X-MBX-APIKEY", &api_key)
-                                .send()
-                                .await
-                            {
-                                if let Ok(positions) = position_response.json::<Vec<Position>>().await {
-                                    // 포지션이 있는 심볼들에 대해서만 거래 내역 조회
-                                    for position in &positions {
-                                        if position.position_amt.parse::<f64>().unwrap_or(0.0) != 0.0 {
-                                            let trades_query = format!(
-                                                "symbol={}&limit=100&timestamp={}", 
-                                                position.symbol, 
-                                                timestamp
-                                            );
-                                            let trades_signature = hmac_sha256(&api_secret, &trades_query);
-                                            let trades_url = format!(
-                                                "https://fapi.binance.com/fapi/v1/userTrades?{}&signature={}",
-                                                trades_query, trades_signature
-                                            );
-    
-                                            if let Ok(trades_response) = client
-                                                .get(&trades_url)
-                                                .header("X-MBX-APIKEY", &api_key)
-                                                .send()
-                                                .await
-                                            {
-                                                if let Ok(trades) = trades_response.json::<Vec<Trade>>().await {
-                                                    let mut total_buy_amount = 0.0;
-                                                    let mut total_buy_quantity = 0.0;
-    
-                                                    for trade in trades {
-                                                        if trade.is_buyer {
-                                                            let price = trade.price.parse::<f64>().unwrap_or(0.0);
-                                                            let quantity = trade.qty.parse::<f64>().unwrap_or(0.0);
-                                                            total_buy_amount += price * quantity;
-                                                            total_buy_quantity += quantity;
-                                                        }
+fn binance_account_connection() -> impl Stream<Item = Message> {
+    stream! {
+        println!("Starting binance futures account connection...");
+
+        let api_key = match env::var("BINANCE_API_KEY") {
+            Ok(key) => {
+                println!("API KEY found");
+                key
+            }
+            Err(e) => {
+                println!("API KEY error: {}", e);
+                yield Message::FetchError("API KEY not found".to_string());
+                return;
+            }
+        };
+
+        let api_secret = match env::var("BINANCE_API_SECRET") {
+            Ok(secret) => {
+                println!("API SECRET found");
+                secret
+            }
+            Err(e) => {
+                println!("API SECRET error: {}", e);
+                yield Message::FetchError("API SECRET not found".to_string());
+                return;
+            }
+        };
+
+        let client = reqwest::Client::new();
+
+        loop {
+            let timestamp = chrono::Utc::now().timestamp_millis();
+            let query = format!("timestamp={}", timestamp);
+            let signature = hmac_sha256(&api_secret, &query);
+            
+            // 퓨처스 계정 정보 엔드포인트로 변경
+            let url = format!(
+                "https://fapi.binance.com/fapi/v2/account?{}&signature={}",
+                query, signature
+            );
+
+            println!("Requesting futures account info: {}", url);
+
+            match client
+                .get(&url)
+                .header("X-MBX-APIKEY", &api_key)
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    println!("Response status: {}", response.status());
+                    
+                    if response.status().is_success() {
+                        let text = response.text().await.unwrap_or_default();
+                        println!("Raw response: {}", text);
+                        
+                        match serde_json::from_str::<FuturesAccountInfo>(&text) {
+                            Ok(account_info) => {
+                                println!("Successfully parsed futures account info");
+                                // 계정 정보 업데이트
+                                for position in &account_info.positions {
+                                    if position.position_amt.parse::<f64>().unwrap_or(0.0) != 0.0 {
+                                        let trades_query = format!(
+                                            "symbol={}&limit=100&timestamp={}", 
+                                            position.symbol, 
+                                            timestamp
+                                        );
+                                        let trades_signature = hmac_sha256(&api_secret, &trades_query);
+                                        let trades_url = format!(
+                                            "https://fapi.binance.com/fapi/v1/userTrades?{}&signature={}",
+                                            trades_query, trades_signature
+                                        );
+
+                                        if let Ok(trades_response) = client
+                                            .get(&trades_url)
+                                            .header("X-MBX-APIKEY", &api_key)
+                                            .send()
+                                            .await
+                                        {
+                                            if let Ok(trades) = trades_response.json::<Vec<Trade>>().await {
+                                                let mut total_buy_amount = 0.0;
+                                                let mut total_buy_quantity = 0.0;
+
+                                                for trade in trades {
+                                                    if trade.is_buyer {
+                                                        let price = trade.price.parse::<f64>().unwrap_or(0.0);
+                                                        let quantity = trade.qty.parse::<f64>().unwrap_or(0.0);
+                                                        total_buy_amount += price * quantity;
+                                                        total_buy_quantity += quantity;
                                                     }
-    
-                                                    let avg_price = if total_buy_quantity > 0.0 {
-                                                        total_buy_amount / total_buy_quantity
-                                                    } else {
-                                                        0.0
-                                                    };
-    
+                                                }
+
+                                                if total_buy_quantity > 0.0 {
+                                                    let avg_price = total_buy_amount / total_buy_quantity;
                                                     let symbol = position.symbol.replace("USDT", "");
                                                     yield Message::UpdateAveragePrice(symbol, avg_price);
                                                 }
                                             }
                                         }
                                     }
-                                    yield Message::UpdatePositions(positions);
                                 }
+                                yield Message::UpdateAccountInfo(account_info);
                             }
-                            yield Message::UpdateAccountInfo(account_info);
+                            Err(e) => {
+                                println!("Failed to parse futures account info: {} \nResponse: {}", e, text);
+                                yield Message::FetchError(format!("Parse error: {}", e));
+                            }
                         }
-                    }
-                    Err(e) => {
-                        println!("Account request error: {}", e);  // 에러 로그
+                    } else {
+                        let error = response.text().await.unwrap_or_default();
+                        println!("API error response: {}", error);
+                        yield Message::FetchError(format!("API error: {}", error));
                     }
                 }
-    
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                Err(e) => {
+                    println!("Request error: {}", e);
+                    yield Message::FetchError(format!("Request failed: {}", e));
+                }
             }
+
+            println!("Sleeping for 5 seconds...");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     }
+}
 /*===============RTarde LINE================= */
 impl Default for RTarde {
     fn default() -> Self {
@@ -704,87 +761,73 @@ impl RTarde {
                     Row::new()
                         .spacing(10)
                         .push(checkbox("MA20", self.show_ma20).on_toggle(|_| Message::ToggleMA20))
-                        .push(
-                            checkbox("MA200", self.show_ma200).on_toggle(|_| Message::ToggleMA200),
-                        ),
+                        .push(checkbox("MA200", self.show_ma200).on_toggle(|_| Message::ToggleMA200)),
                 )
                 .push(
-                    // KNN 체크박스 추가
-                    Row::new().spacing(10).push(
-                        checkbox("KNN prediction", self.knn_enabled)
-                            .on_toggle(|_| Message::ToggleKNN),
-                    ),
+                    Row::new()
+                        .spacing(10)
+                        .push(checkbox("KNN prediction", self.knn_enabled).on_toggle(|_| Message::ToggleKNN)),
                 ),
         )
         .padding(10);
-        let prediction_display = Container::new(Column::new().push(
-            if let Some(alert) = self.alerts.front() {
+    
+        let prediction_display = Container::new(
+            Column::new().push(if let Some(alert) = self.alerts.front() {
                 Text::new(&alert.message).color(match alert.alert_type {
-                    AlertType::Buy => Color::from_rgb(0.0, 0.8, 0.0), // 초록색
-                    AlertType::Sell => Color::from_rgb(0.8, 0.0, 0.0), // 빨간색
-                    AlertType::Info => Color::from_rgb(0.0, 0.0, 0.8), // 파란색
-                    AlertType::Error => Color::from_rgb(0.8, 0.0, 0.0), // 빨간색
+                    AlertType::Buy => Color::from_rgb(0.0, 0.8, 0.0),
+                    AlertType::Sell => Color::from_rgb(0.8, 0.0, 0.0),
+                    AlertType::Info => Color::from_rgb(0.0, 0.0, 0.8),
+                    AlertType::Error => Color::from_rgb(0.8, 0.0, 0.0),
                 })
             } else {
-                Text::new("") // 알림이 없을 경우 빈 텍스트
-            },
-        ))
+                Text::new("")
+            }),
+        )
         .padding(10)
         .width(Length::Shrink)
         .height(Length::Shrink);
-
+    
         let coins: Vec<String> = self.coin_list.keys().cloned().collect();
-
         let coin_picker = pick_list(coins, Some(self.selected_coin.clone()), Message::SelectCoin)
             .width(Length::Fixed(150.0));
-
-        // 봉 타입 선택을 위한 드롭다운
+    
         let candle_types = vec![CandleType::Minute1, CandleType::Minute3, CandleType::Day];
-        let candle_type_strings: Vec<String> = candle_types
-            .iter()
-            .map(|ct| ct.as_str().to_string())
-            .collect();
-
+        let candle_type_strings: Vec<String> = candle_types.iter().map(|ct| ct.as_str().to_string()).collect();
         let candle_type_picker = pick_list(
             candle_type_strings,
             Some(self.selected_candle_type.as_str().to_string()),
             |s| {
                 let candle_type = match s.as_str() {
-                    "1Minute" => CandleType::Minute1, // 변경: "1분봉" -> "1Minute"
-                    "3Minute" => CandleType::Minute3, // 변경: "3분봉" -> "3Minute"
-                    "Day" => CandleType::Day,         // 변경: 매칭 문자열 통일
+                    "1Minute" => CandleType::Minute1,
+                    "3Minute" => CandleType::Minute3,
+                    "Day" => CandleType::Day,
                     _ => CandleType::Day,
                 };
                 Message::SelectCandleType(candle_type)
             },
         )
         .width(Length::Fixed(100.0));
-
+    
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            // 현재 보유중인 코인의 수익률 계산
-            let avg_price = self
-                .average_prices
-                .get(&self.selected_coin)
-                .copied()
-                .unwrap_or(0.0);
+            let avg_price = self.average_prices.get(&self.selected_coin).copied().unwrap_or(0.0);
             let profit_percentage = if avg_price > 0.0 {
                 ((info.price - avg_price) / avg_price * 100.0)
             } else {
                 0.0
             };
-
+    
             let profit_color = if profit_percentage >= 0.0 {
                 Color::from_rgb(0.0, 0.8, 0.0)
             } else {
                 Color::from_rgb(0.8, 0.0, 0.0)
             };
-
-            let profit_color = if profit_percentage >= 0.0 {
-                Color::from_rgb(0.0, 0.8, 0.0) // 초록색 (이익)
-            } else {
-                Color::from_rgb(0.8, 0.0, 0.0) // 빨간색 (손실)
-            };
-
+    
+            let position_info = self.account_info.as_ref().and_then(|account| {
+                account.positions.iter().find(|pos| {
+                    pos.symbol == format!("{}USDT", self.selected_coin)
+                })
+            });
+    
             Column::new()
                 .spacing(10)
                 .push(
@@ -807,63 +850,71 @@ impl RTarde {
                 )
                 .push(
                     Container::new(
-                        Column::new().push(
-                            Text::new(format!("평가손익: {:.2}%", profit_percentage))
-                                .size(20)
-                                .color(profit_color),
-                        ),
-                    )
-                    .padding(10)
-                    .width(Length::Fill),
-                )
-                .push(
-                    Container::new(
                         Column::new()
-                            .spacing(8)
+                            .push(Text::new(format!("평가손익: {:.2}%", profit_percentage)).size(20).color(profit_color))
                             .push(
-                                Row::new().spacing(10).push(Text::new("24h P/L:")).push(
-                                    Text::new(match &self.account_info {
-                                        Some(info) => {
-                                            // USDT 잔고 찾기
-                                            let usdt_balance = info
-                                                .balances
-                                                .iter()
-                                                .find(|b| b.asset == "USDT")
-                                                .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
-                                                .unwrap_or(0.0);
-
-                                            if usdt_balance == 0.0 {
-                                                "0.00 USDT".to_string()
+                                Row::new()
+                                    .spacing(10)
+                                    .push(Text::new("계좌 잔고:"))
+                                    .push(Text::new(
+                                        if let Some(account) = &self.account_info {
+                                            if let Some(asset) = account.assets.iter().find(|a| a.asset == "USDT") {
+                                                let available = asset.available_balance.parse::<f64>().unwrap_or(0.0);
+                                                let unrealized = asset.unrealized_profit.parse::<f64>().unwrap_or(0.0);
+                                                format!("{:.2} USDT (미실현: {:.2})", available, unrealized)
                                             } else {
-                                                format!("{:.2} USDT", usdt_balance)
+                                                "0.00 USDT".to_string()
                                             }
+                                        } else {
+                                            "Loading...".to_string()
                                         }
-                                        None => "0.00 USDT".to_string(),
-                                    })
-                                    .size(16), // .style(|_| TextColor::Gray),
-                                ),
+                                    ).size(16)),
                             )
                             .push(
                                 Row::new()
-                                    .spacing(5)
-                                    .push(
-                                        Text::new("24H LOW")
-                                            .size(14)
-                                            .color(Color::from_rgb(0.5, 0.5, 0.5)),
-                                    )
-                                    .push(
-                                        Text::new(format!("{:.0} USDT", info.price * 0.9)).size(14),
-                                    ),
+                                    .spacing(10)
+                                    .push(Text::new("포지션:"))
+                                    .push(Text::new(
+                                        if let Some(pos) = position_info {
+                                            let amt = pos.position_amt.parse::<f64>().unwrap_or(0.0);
+                                            let entry = pos.entry_price.parse::<f64>().unwrap_or(0.0);
+                                            let pnl = pos.unrealized_profit.parse::<f64>().unwrap_or(0.0);
+                                            if amt != 0.0 {
+                                                format!("{:.3} (진입: {:.2}, PNL: {:.2})", amt, entry, pnl)
+                                            } else {
+                                                "없음".to_string()
+                                            }
+                                        } else {
+                                            "없음".to_string()
+                                        }
+                                    ).size(16)),
                             ),
                     )
                     .padding(10)
                     .width(Length::Fill),
                 )
         } else {
-            Column::new().push(Text::new("Loding..."))
+            Column::new().push(Text::new("Loading..."))
         };
-
-        // 수정된 부분: Chart::new()에 selected_candle_type 전달
+        let position_label = format!("{} Position:", self.selected_coin);
+        let position_text = if let Some(info) = &self.account_info {
+            let symbol = format!("{}USDT", self.selected_coin);
+            if let Some(position) = info.positions.iter().find(|p| p.symbol == symbol) {
+                let amt = position.position_amt.parse::<f64>().unwrap_or(0.0);
+                let entry = position.entry_price.parse::<f64>().unwrap_or(0.0);
+                let pnl = position.unrealized_profit.parse::<f64>().unwrap_or(0.0);
+                if amt != 0.0 {
+                    let direction = if amt > 0.0 { "Long" } else { "Short" };
+                    format!("{} {:.8} @ {:.2} (PNL: {:.2})", direction, amt.abs(), entry, pnl)
+                } else {
+                    "No Position".to_string()
+                }
+            } else {
+                "No Position".to_string()
+            }
+        } else {
+            "Loading...".to_string()
+        };
         let canvas = Canvas::new(Chart::new(
             self.candlesticks.clone(),
             self.selected_candle_type.clone(),
@@ -873,195 +924,158 @@ impl RTarde {
             self.show_ma200,
             self.knn_enabled,
             self.knn_prediction.clone(),
-            self.knn_buy_signals.clone(),  // 매수 신호 전달
-            self.knn_sell_signals.clone(), // 매도 신호 전달
+            self.knn_buy_signals.clone(),
+            self.knn_sell_signals.clone(),
         ))
         .width(iced::Fill)
         .height(Length::from(800));
-        //왼쪾 사이드바
+    
+        let auto_trading_toggle = Container::new(
+            Row::new()
+                .spacing(10)
+                .push(checkbox("Auto trading", self.auto_trading_enabled).on_toggle(|_| Message::ToggleAutoTrading))
+                .push(Text::new(if self.auto_trading_enabled {"Auto trading on"} else {"Auto trading off"})
+                    .size(14)
+                    .color(if self.auto_trading_enabled {
+                        Color::from_rgb(0.0, 0.8, 0.0)
+                    } else {
+                        Color::from_rgb(0.5, 0.5, 0.5)
+                    })),
+        )
+        .padding(10)
+        .width(Length::Fill);
+    let right_side_bar = Column::new()
+    .spacing(20)
+    .padding(20)
+    .push(auto_trading_toggle)
+    .push(
+        Column::new()
+            .spacing(10)
+            .push(Text::new("Account Info").size(24))
+            .push(
+                Row::new()
+                    .spacing(10)
+                    .push(Text::new("Total Balance:"))
+                    .push(Text::new(
+                        if let Some(info) = &self.account_info {
+                            if let Some(asset) = info.assets.iter().find(|a| a.asset == "USDT") {
+                                let balance = asset.wallet_balance.parse::<f64>().unwrap_or(0.0);
+                                let pnl = asset.unrealized_profit.parse::<f64>().unwrap_or(0.0);
+                                format!("{:.2} USDT (PNL: {:.2})", balance, pnl)
+                            } else {
+                                "0.00 USDT".to_string()
+                            }
+                        } else {
+                            "Loading...".to_string()
+                        }
+                    ).size(16)),
+            ),
+    )
+    .push(Container::new(Text::new("Order").size(24)).width(Length::Fill).center_x(0))
+    .push(
+        Column::new()
+            .spacing(10)
+            .push(Text::new("Order Type").size(16))
+            .push(
+                Row::new()
+                    .spacing(10)
+                    .push(button(Text::new("Long Market")).width(Length::Fill).on_press(Message::MarketBuy))
+                    .push(button(Text::new("Short Market")).width(Length::Fill).on_press(Message::MarketSell)),
+            ),
+    )
+    .push(
+        Column::new()
+            .spacing(10)
+            .push(Text::new("Limit Order").size(16))
+            .push(
+                Row::new()
+                    .spacing(10)
+                    .push(text_input("Enter price...", ""))
+                    .push(Text::new("USDT")),
+            )
+            .push(
+                Row::new()
+                    .spacing(10)
+                    .push(text_input("Enter quantity...", ""))
+                    .push(Text::new(self.selected_coin.clone())),
+            )
+            .push(
+                Row::new()
+                    .spacing(10)
+                    .push(button(Text::new("Long Limit")).width(Length::Fill))
+                    .push(button(Text::new("Short Limit")).width(Length::Fill)),
+            ),
+    )
+    .push(
+        Column::new()
+            .spacing(10)
+            .push(Text::new("Position Size").size(16))
+            .push(
+                Row::new()
+                    .spacing(5)
+                    .push(button(Text::new("10%")).width(Length::Fill))
+                    .push(button(Text::new("25%")).width(Length::Fill))
+                    .push(button(Text::new("50%")).width(Length::Fill))
+                    .push(button(Text::new("100%")).width(Length::Fill)),
+            ),
+    )
+    .push(Space::with_height(Length::Fill))
+    .push(
+        Container::new(
+            Column::new()
+                .spacing(10)
+                .push(Text::new("Current Positions").size(16))
+                .push(
+                    Row::new()
+                        .spacing(10)
+                        .push(Text::new("USDT Balance:"))
+                        .push(Text::new(
+                            if let Some(info) = &self.account_info {
+                                if let Some(asset) = info.assets.iter().find(|a| a.asset == "USDT") {
+                                    let available = asset.available_balance.parse::<f64>().unwrap_or(0.0);
+                                    format!("{:.2}", available)
+                                } else {
+                                    "0.00".to_string()
+                                }
+                            } else {
+                                "Loading...".to_string()
+                            }
+                        ).size(16)),
+                )
+                .push(
+                    Row::new()
+    .spacing(10)
+    .push(Text::new(format!("{} Position:", self.selected_coin)).size(16))  // 직접 format
+    .push(Text::new(
+        if let Some(info) = &self.account_info {
+            let symbol = format!("{}USDT", self.selected_coin);
+            if let Some(position) = info.positions.iter().find(|p| p.symbol == symbol) {
+                let amt = position.position_amt.parse::<f64>().unwrap_or(0.0);
+                let entry = position.entry_price.parse::<f64>().unwrap_or(0.0);
+                let pnl = position.unrealized_profit.parse::<f64>().unwrap_or(0.0);
+                if amt != 0.0 {
+                    let direction = if amt > 0.0 { "Long" } else { "Short" };
+                    format!("{} {:.8} @ {:.2} (PNL: {:.2})", direction, amt.abs(), entry, pnl)
+                } else {
+                    "No Position".to_string()
+                }
+            } else {
+                "No Position".to_string()
+            }
+        } else {
+            "Loading...".to_string()
+        }
+    ).size(16))
+                ),
+        ),
+    );
+    
         let left_side_bar = Column::new()
             .spacing(20)
             .padding(20)
             .push(current_coin_info);
-        //오른쪽 사이드 바
-
-        let auto_trading_toggle = Container::new(
-            Row::new()
-                .spacing(10)
-                // .align_items(Alignment::Center) // 세로 중앙 정렬
-                .push(
-                    checkbox("Auto trading", self.auto_trading_enabled)
-                        .on_toggle(|_| Message::ToggleAutoTrading),
-                )
-                .push(
-                    Text::new(if self.auto_trading_enabled {
-                        "Auto trading on"
-                    } else {
-                        "Auto trading off"
-                    })
-                    .size(14)
-                    .color(if self.auto_trading_enabled {
-                        Color::from_rgb(0.0, 0.8, 0.0) // 초록색
-                    } else {
-                        Color::from_rgb(0.5, 0.5, 0.5) // 회색
-                    }),
-                ),
-        )
-        .padding(10)
-        .width(Length::Fill);
-
-        let right_side_bar = Column::new()
-            .spacing(20)
-            .padding(20)
-            .push(auto_trading_toggle)
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("Account Info").size(24))
-                    .push(
-                        Row::new().spacing(10).push(Text::new("Total:")).push(
-                            Text::new(match &self.account_info {
-                                Some(info) => {
-                                    let usdt_balance = info
-                                        .balances
-                                        .iter()
-                                        .find(|b| b.asset == "USDT")
-                                        .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
-                                        .unwrap_or(0.0);
-                                    format!("{:.2} USDT", usdt_balance)
-                                }
-                                None => "Loading...".to_string(),
-                            })
-                            .size(16),
-                        ),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(Text::new(&self.selected_coin))
-                            .push(Text::new(match &self.account_info {
-                                Some(info) => {
-                                    let balance = info
-                                        .balances
-                                        .iter()
-                                        .find(|b| b.asset == self.selected_coin)
-                                        .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
-                                        .unwrap_or(0.0);
-                                    format!("{:.8}", balance)
-                                }
-                                None => "Loading...".to_string(),
-                            })),
-                    ),
-            )
-            .push(
-                Container::new(Text::new("Order").size(24))
-                    .width(Length::Fill)
-                    .center_x(0),
-            )
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("Order Type").size(16))
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(
-                                button(Text::new("buy at market price"))
-                                    .width(Length::Fill)
-                                    .on_press(Message::MarketBuy),
-                            )
-                            .push(
-                                button(Text::new("sell at market price"))
-                                    .width(Length::Fill)
-                                    .on_press(Message::MarketSell),
-                            ),
-                    ),
-            )
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("limit order").size(16))
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(text_input("Enter price...", ""))
-                            .push(Text::new("USDT")),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(text_input("Please enter the quantity....", ""))
-                            .push(Text::new(self.selected_coin.clone())),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(button(Text::new("limit price purchase")).width(Length::Fill))
-                            .push(button(Text::new("limit price sale")).width(Length::Fill)),
-                    ),
-            )
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("order rate").size(16))
-                    .push(
-                        Row::new()
-                            .spacing(5)
-                            .push(button(Text::new("10%")).width(Length::Fill))
-                            .push(button(Text::new("25%")).width(Length::Fill))
-                            .push(button(Text::new("50%")).width(Length::Fill))
-                            .push(button(Text::new("100%")).width(Length::Fill)),
-                    ),
-            )
-            .push(Space::with_height(Length::Fill))
-            // 자산 보유 현황
-            .push(Container::new(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("assets held").size(16))
-                    .push(
-                        Row::new().spacing(10).push(Text::new("USDT")).push(
-                            Text::new(match &self.account_info {
-                                Some(info) => {
-                                    let usdt_balance = info
-                                        .balances
-                                        .iter()
-                                        .find(|b| b.asset == "USDT")
-                                        .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
-                                        .unwrap_or(0.0);
-                                    format!("{:.2}", usdt_balance)
-                                }
-                                None => "Loading...".to_string(),
-                            })
-                            .size(16),
-                        ),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(Text::new(&self.selected_coin))
-                            .push(
-                                Text::new(match &self.account_info {
-                                    Some(info) => {
-                                        let balance = info
-                                            .balances
-                                            .iter()
-                                            .find(|b| b.asset == self.selected_coin)
-                                            .map(|b| b.free.parse::<f64>().unwrap_or(0.0))
-                                            .unwrap_or(0.0);
-                                        format!("{:.8}", balance)
-                                    }
-                                    None => "Loading...".to_string(),
-                                })
-                                .size(16),
-                            ),
-                    ),
-            ));
-
-        //메인
-
+    
         Column::new()
-            // .spacing(20)
             .push(
                 Row::new()
                     .push(coin_picker.width(FillPortion(1)))
@@ -1077,7 +1091,6 @@ impl RTarde {
             )
             .into()
     }
-
     pub fn update(&mut self, message: Message) {
         match message {
             Message::UpdateAveragePrice(symbol, price) => {
@@ -1131,26 +1144,28 @@ impl RTarde {
             }
             Message::MarketSell => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
-                    // 현재 선택된 코인의 보유량 확인
+                    // 현재 선택된 코인의 포지션 확인
                     if let Some(account_info) = &self.account_info {
-                        if let Some(balance) = account_info
-                            .balances
+                        let symbol = format!("{}USDT", self.selected_coin);
+                        if let Some(position) = account_info
+                            .positions
                             .iter()
-                            .find(|b| b.asset == self.selected_coin)
+                            .find(|pos| pos.symbol == symbol)
                         {
-                            if let Ok(total_amount) = balance.free.parse::<f64>() {
-                                if total_amount > 0.0 {
+                            if let Ok(position_amount) = position.position_amt.parse::<f64>() {
+                                if position_amount != 0.0 {
                                     let price = info.price;
                                     let selected_coin = self.selected_coin.clone();
                                     let alert_sender = self.alert_sender.clone();
-
+                                    let amount = position_amount.abs(); // 포지션 크기의 절대값
+            
                                     let runtime = tokio::runtime::Handle::current();
                                     runtime.spawn(async move {
                                         if let Err(e) = execute_trade(
                                             selected_coin.clone(),
                                             TradeType::Sell,
                                             price,
-                                            total_amount,
+                                            amount,
                                             alert_sender,
                                         )
                                         .await
@@ -1158,24 +1173,32 @@ impl RTarde {
                                             println!("시장가 매도 실패: {:?}", e);
                                         }
                                     });
-
+            
                                     self.add_alert(
                                         format!(
-                                            "전체 수량 매도 시도: {:.8} {}",
-                                            total_amount, self.selected_coin
+                                            "전체 포지션 청산 시도: {:.8} {}",
+                                            amount, self.selected_coin
                                         ),
                                         AlertType::Info,
                                     );
                                 } else {
                                     self.add_alert(
                                         format!(
-                                            "매도 실패: {} 보유량이 없습니다",
+                                            "매도 실패: {} 포지션이 없습니다",
                                             self.selected_coin
                                         ),
                                         AlertType::Error,
                                     );
                                 }
                             }
+                        } else {
+                            self.add_alert(
+                                format!(
+                                    "매도 실패: {} 포지션을 찾을 수 없습니다",
+                                    self.selected_coin
+                                ),
+                                AlertType::Error,
+                            );
                         }
                     }
                 }
