@@ -3,14 +3,10 @@ use crate::api::FuturesAccountInfo;
 use crate::get_symbol_info;
 use crate::utils::hmac_sha256;
 use crate::AlertType;
-use crate::BinanceTrade;
-use crate::Message;
-use crate::Trade;
-use futures_util::SinkExt;
+
 use crate::TradeType;
-use crate::{BinanceCandle, CandleType, Candlestick};
-use async_stream::stream;
-use dotenv;
+
+use futures_util::SinkExt;
 use futures_util::Stream; // Add this at the top with other imports
 use iced::futures::{channel::mpsc, StreamExt};
 use iced::time::{self, Duration, Instant};
