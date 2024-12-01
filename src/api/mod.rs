@@ -58,47 +58,62 @@ pub struct FuturesAccountInfo {
 pub struct FuturesAsset {
     pub asset: String,
     #[serde(rename = "walletBalance")]
-    pub  wallet_balance: String,
+    pub wallet_balance: String,
     #[serde(rename = "unrealizedProfit")]
-    pub  unrealized_profit: String,
+    pub unrealized_profit: String,
     #[serde(rename = "marginBalance")]
-    pub  margin_balance: String,
+    pub margin_balance: String,
     #[serde(rename = "maintMargin")]
-    pub   maint_margin: String,
+    pub maint_margin: String,
     #[serde(rename = "initialMargin")]
-    pub  initial_margin: String,
+    pub initial_margin: String,
     #[serde(rename = "positionInitialMargin")]
-    pub  position_initial_margin: String,
+    pub position_initial_margin: String,
     #[serde(rename = "openOrderInitialMargin")]
-    pub  open_order_initial_margin: String,
+    pub open_order_initial_margin: String,
     #[serde(rename = "maxWithdrawAmount")]
-    pub   max_withdraw_amount: String,
+    pub max_withdraw_amount: String,
     #[serde(rename = "crossWalletBalance")]
-    pub  cross_wallet_balance: String,
+    pub cross_wallet_balance: String,
     #[serde(rename = "crossUnPnl")]
-    pub  cross_un_pnl: String,
+    pub cross_un_pnl: String,
     #[serde(rename = "availableBalance")]
     pub available_balance: String,
 }
 #[derive(Debug, Deserialize, Clone)]
 pub struct FuturesPosition {
-    pub   symbol: String,
+    pub symbol: String,
     #[serde(rename = "initialMargin")]
-    pub   initial_margin: String,
+    pub initial_margin: String,
     #[serde(rename = "maintMargin")]
-    pub   maint_margin: String,
+    pub maint_margin: String,
     #[serde(rename = "unrealizedProfit")]
-    pub  unrealized_profit: String,
+    pub unrealized_profit: String,
     #[serde(rename = "positionInitialMargin")]
-    pub  position_initial_margin: String,
+    pub position_initial_margin: String,
     pub leverage: String,
-    pub  isolated: bool,
+    pub isolated: bool,
     #[serde(rename = "entryPrice")]
-    pub  entry_price: String,
+    pub entry_price: String,
     #[serde(rename = "maxNotional")]
-    pub  max_notional: String,
+    pub max_notional: String,
     #[serde(rename = "positionSide")]
-    pub  position_side: String,
+    pub position_side: String,
     #[serde(rename = "positionAmt")]
-    pub  position_amt: String,
+    pub position_amt: String,
+}
+#[derive(Debug, Deserialize, Clone)]
+struct BinanceCandle {
+    open_time: u64,
+    open: String,
+    high: String,
+    low: String,
+    close: String,
+    volume: String,
+    close_time: u64,
+    quote_asset_volume: String,
+    number_of_trades: u32,
+    taker_buy_base_asset_volume: String,
+    taker_buy_quote_asset_volume: String,
+    ignore: String,
 }

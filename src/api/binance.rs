@@ -1,6 +1,7 @@
+use crate::api::BinanceCandle;
 use crate::BinanceTrade;
 use crate::Message;
-use crate::{BinanceCandle, CandleType, Candlestick};
+use crate::{CandleType, Candlestick};
 use async_stream::stream;
 use futures_util::Stream; // Add this at the top with other imports
 use iced::futures::{channel::mpsc, StreamExt};
@@ -157,4 +158,49 @@ pub fn fetch_candles(
 ) -> Result<BTreeMap<u64, Candlestick>, Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(fetch_candles_async(market, candle_type, to_date))
+}
+pub async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
+    let url = "https://fapi.binance.com/fapi/v1/ticker/24hr";
+
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await?;
+    let data: Vec<serde_json::Value> = response.json().await?;
+
+    let mut pairs: Vec<(String, f64)> = data
+        .into_iter()
+        .filter(|item| {
+            item["symbol"]
+                .as_str()
+                .map(|s| s.ends_with("USDT"))
+                .unwrap_or(false)
+        })
+        .filter_map(|item| {
+            let symbol = item["symbol"].as_str()?.to_string();
+            let volume = item["quoteVolume"].as_str()?.parse::<f64>().ok()?;
+            Some((symbol, volume))
+        })
+        .collect();
+
+    pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(pairs.into_iter().take(20).collect())
+}
+
+pub async fn get_symbol_info(symbol: &str) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+    let url = "https://fapi.binance.com/fapi/v1/exchangeInfo";
+    let response = reqwest::get(url).await?;
+    let info: serde_json::Value = response.json().await?;
+
+    if let Some(symbols) = info["symbols"].as_array() {
+        for symbol_info in symbols {
+            if symbol_info["symbol"].as_str() == Some(symbol) {
+                let quantity_precision =
+                    symbol_info["quantityPrecision"].as_u64().unwrap_or(3) as u32;
+                let price_precision = symbol_info["pricePrecision"].as_u64().unwrap_or(2) as u32;
+                return Ok((quantity_precision, price_precision));
+            }
+        }
+    }
+
+    Err("Symbol not found".into())
 }

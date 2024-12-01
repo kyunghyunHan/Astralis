@@ -9,3 +9,9 @@ pub fn hmac_sha256(secret: &str, message: &str) -> String {
     let result = mac.finalize();
     hex::encode(result.into_bytes())
 }
+
+//거래량 조정
+pub fn adjust_precision(value: f64, precision: u32) -> f64 {
+    let scale = 10f64.powi(precision as i32);
+    (value * scale).floor() / scale
+}

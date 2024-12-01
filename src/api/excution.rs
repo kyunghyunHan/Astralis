@@ -1,5 +1,5 @@
-use crate::adjust_precision;
-use crate::get_symbol_info;
+use crate::api::binance::get_symbol_info;
+use crate::utils::adjust_precision;
 use crate::utils::hmac_sha256;
 use crate::AlertType;
 use crate::TradeType;

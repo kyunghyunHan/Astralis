@@ -1,8 +1,6 @@
 #![allow(non_utf8_strings)]
-use async_stream::stream;
 use dotenv::dotenv;
-use futures_util::SinkExt;
-use futures_util::Stream; // Add this at the top with other imports
+use models::OptimizedKNNPredictor;
 mod api;
 mod models;
 mod ui;
@@ -10,34 +8,29 @@ mod utils;
 use api::FuturesAccountInfo;
 use api::{
     account::binance_account_connection,
-    binance::{binance_connection, fetch_candles, fetch_candles_async},
+    binance::{binance_connection, fetch_candles, fetch_candles_async, get_top_volume_pairs},
     excution::execute_trade,
     BinanceTrade,
 };
-use iced::futures::{channel::mpsc, StreamExt};
+use iced::futures::channel::mpsc;
 use iced::time::{self, Duration, Instant};
 use iced::widget::Row;
 use iced::Length::FillPortion;
 use iced::{
-    mouse,
     widget::{
-        button, canvas,
+        button,
         canvas::{
             event::{self, Event},
             Canvas, Program,
         },
-        checkbox, column, container, pick_list, text, text_input, Checkbox, Column, Container,
-        Space, Text,
+        checkbox, container, pick_list, Column, Container, Space, Text,
     },
     Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
 };
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::env;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
 use ui::{chart::calculate_knn_signals, CandleType, Candlestick, Chart, ChartState};
 
 /*===============STRUCT LINE================= */
@@ -203,21 +196,6 @@ struct Position {
     liquidation_price: String,
     leverage: String,
 }
-#[derive(Debug, Deserialize, Clone)]
-struct BinanceCandle {
-    open_time: u64,
-    open: String,
-    high: String,
-    low: String,
-    close: String,
-    volume: String,
-    close_time: u64,
-    quote_asset_volume: String,
-    number_of_trades: u32,
-    taker_buy_base_asset_volume: String,
-    taker_buy_quote_asset_volume: String,
-    ignore: String,
-}
 
 // 거래 지표 정보를 담는 구조체
 #[derive(Debug, Clone)]
@@ -226,67 +204,6 @@ struct TradeIndicators {
     ma5: f32,
     ma20: f32,
     volume_ratio: f32,
-}
-// KNN 예측기 최적화 버전
-#[derive(Debug, Clone)]
-struct OptimizedKNNPredictor {
-    k: usize,
-    window_size: usize,
-    features_buffer: VecDeque<Vec<f32>>,
-    labels_buffer: VecDeque<bool>,
-    buffer_size: usize,
-}
-
-/*===============CONNECTION LINE================= */
-
-async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
-    let url = "https://fapi.binance.com/fapi/v1/ticker/24hr";
-
-    let client = reqwest::Client::new();
-    let response = client.get(url).send().await?;
-    let data: Vec<serde_json::Value> = response.json().await?;
-
-    let mut pairs: Vec<(String, f64)> = data
-        .into_iter()
-        .filter(|item| {
-            item["symbol"]
-                .as_str()
-                .map(|s| s.ends_with("USDT"))
-                .unwrap_or(false)
-        })
-        .filter_map(|item| {
-            let symbol = item["symbol"].as_str()?.to_string();
-            let volume = item["quoteVolume"].as_str()?.parse::<f64>().ok()?;
-            Some((symbol, volume))
-        })
-        .collect();
-
-    pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    Ok(pairs.into_iter().take(20).collect())
-}
-
-async fn get_symbol_info(symbol: &str) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-    let url = "https://fapi.binance.com/fapi/v1/exchangeInfo";
-    let response = reqwest::get(url).await?;
-    let info: serde_json::Value = response.json().await?;
-
-    if let Some(symbols) = info["symbols"].as_array() {
-        for symbol_info in symbols {
-            if symbol_info["symbol"].as_str() == Some(symbol) {
-                let quantity_precision =
-                    symbol_info["quantityPrecision"].as_u64().unwrap_or(3) as u32;
-                let price_precision = symbol_info["pricePrecision"].as_u64().unwrap_or(2) as u32;
-                return Ok((quantity_precision, price_precision));
-            }
-        }
-    }
-
-    Err("Symbol not found".into())
-}
-fn adjust_precision(value: f64, precision: u32) -> f64 {
-    let scale = 10f64.powi(precision as i32);
-    (value * scale).floor() / scale
 }
 
 /*===============RTarde LINE================= */
@@ -622,28 +539,7 @@ impl RTarde {
                                     "Loading...".to_string()
                                 })
                                 .size(16),
-                            ), // .push(Text::new("account Balance:"))
-                               // .push(
-                               //     Text::new(if let Some(account) = &self.account_info {
-                               //         if let Some(asset) =
-                               //             account.assets.iter().find(|a| a.asset == "USDT")
-                               //         {
-                               //             let available =
-                               //                 asset.available_balance.parse::<f64>().unwrap_or(0.0);
-                               //             let unrealized =
-                               //                 asset.unrealized_profit.parse::<f64>().unwrap_or(0.0);
-                               //             format!(
-                               //                 "{:.2} USDT (unrealized: {:.2})",
-                               //                 available, unrealized
-                               //             )
-                               //         } else {
-                               //             "0.00 USDT".to_string()
-                               //         }
-                               //     } else {
-                               //         "Loading...".to_string()
-                               //     })
-                               //     .size(16),
-                               // ),
+                            ),
                     )
                     .push(Row::new().push(Text::new("account Balance:"))),
             )
@@ -671,8 +567,6 @@ impl RTarde {
                             ),
                     ),
             )
-         
-       
             .push(Space::with_height(Length::Fill))
             .push(Container::new(
                 Column::new()
@@ -1157,10 +1051,7 @@ impl RTarde {
             }
             Message::UpdatePrice(symbol, price, change_rate) => {
                 if let Some(info) = self.coin_list.get_mut(&symbol) {
-                    // info.prev_price = info.price;
                     info.price = price;
-                    // info.change_percent = change_rate;
-                    // println!("Price updated for {}: {} ({}%)", symbol, price, change_rate);
                 }
             }
             Message::WebSocketInit(sender) => {
@@ -1322,7 +1213,6 @@ impl RTarde {
         }
     }
 }
-/*===============CHART LINE================= */
 
 impl std::fmt::Display for CandleType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1333,7 +1223,6 @@ impl std::fmt::Display for CandleType {
         }
     }
 }
-/*===============UTILS LINE================= */
 trait VecDequeExt<T: 'static> {
     fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)>;
 }
@@ -1341,135 +1230,6 @@ trait VecDequeExt<T: 'static> {
 impl<T: 'static> VecDequeExt<T> for VecDeque<(u64, T)> {
     fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)> {
         self.iter().skip(range.start).take(range.end - range.start)
-    }
-}
-
-impl OptimizedKNNPredictor {
-    fn new(k: usize, window_size: usize, buffer_size: usize) -> Self {
-        Self {
-            k,
-            window_size,
-            features_buffer: VecDeque::with_capacity(buffer_size),
-            labels_buffer: VecDeque::with_capacity(buffer_size),
-            buffer_size,
-        }
-    }
-
-    // 특성 추출 최적화
-    fn extract_features(&self, candlesticks: &[(&u64, &Candlestick)]) -> Option<Vec<f32>> {
-        if candlesticks.len() < self.window_size {
-            return None;
-        }
-
-        let mut features = Vec::with_capacity(self.window_size * 4);
-
-        // 가격 변화율 계산
-        let mut price_changes = Vec::with_capacity(self.window_size - 1);
-        for window in candlesticks.windows(2) {
-            let price_change =
-                ((window[1].1.close - window[0].1.close) / window[0].1.close) * 100.0;
-            price_changes.push(price_change);
-        }
-
-        // 기술적 지표 계산
-        let (ma5, ma20) = self.calculate_moving_averages(candlesticks);
-        let rsi = self.calculate_rsi(&price_changes, 14);
-        let volume_ratio = self.calculate_volume_ratio(candlesticks);
-
-        // 특성 결합
-        features.extend_from_slice(&[
-            ma5 / ma20 - 1.0,                             // MA 비율
-            rsi / 100.0,                                  // 정규화된 RSI
-            volume_ratio,                                 // 거래량 비율
-            price_changes.last().unwrap_or(&0.0) / 100.0, // 최근 가격 변화
-        ]);
-
-        Some(features)
-    }
-
-    // 이동평균 계산 최적화
-    fn calculate_moving_averages(&self, data: &[(&u64, &Candlestick)]) -> (f32, f32) {
-        let (ma5, ma20) = data
-            .iter()
-            .rev()
-            .take(20)
-            .fold((0.0, 0.0), |acc, (_, candle)| {
-                (
-                    if data.len() >= 5 {
-                        acc.0 + candle.close / 5.0
-                    } else {
-                        acc.0
-                    },
-                    acc.1 + candle.close / 20.0,
-                )
-            });
-        (ma5, ma20)
-    }
-
-    // RSI 계산 최적화
-    fn calculate_rsi(&self, price_changes: &[f32], period: usize) -> f32 {
-        let (gains, losses): (Vec<_>, Vec<_>) = price_changes
-            .iter()
-            .map(|&change| {
-                if change > 0.0 {
-                    (change, 0.0)
-                } else {
-                    (0.0, -change)
-                }
-            })
-            .unzip();
-
-        let avg_gain: f32 = gains.iter().sum::<f32>() / period as f32;
-        let avg_loss: f32 = losses.iter().sum::<f32>() / period as f32;
-
-        if avg_loss == 0.0 {
-            100.0
-        } else {
-            100.0 - (100.0 / (1.0 + (avg_gain / avg_loss)))
-        }
-    }
-
-    // 거래량 비율 계산
-    fn calculate_volume_ratio(&self, data: &[(&u64, &Candlestick)]) -> f32 {
-        let recent_volume = data.last().map(|(_, c)| c.volume).unwrap_or(0.0);
-        let avg_volume = data.iter().map(|(_, c)| c.volume).sum::<f32>() / data.len() as f32;
-        recent_volume / avg_volume
-    }
-
-    // 예측 최적화
-    fn predict(&self, features: &[f32]) -> Option<String> {
-        if self.features_buffer.is_empty() {
-            return None;
-        }
-
-        let mut distances: Vec<(f32, bool)> = self
-            .features_buffer
-            .iter()
-            .zip(self.labels_buffer.iter())
-            .map(|(train_features, &label)| {
-                let distance = self.euclidean_distance(features, train_features);
-                (distance, label)
-            })
-            .collect();
-
-        distances.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-        let up_votes = distances
-            .iter()
-            .take(self.k)
-            .filter(|&&(_, label)| label)
-            .count();
-
-        Some(if up_votes > self.k / 2 { "▲" } else { "▼" }.to_string())
-    }
-
-    // 거리 계산 최적화
-    fn euclidean_distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y).powi(2))
-            .sum::<f32>()
-            .sqrt()
     }
 }
 

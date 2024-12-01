@@ -1,6 +1,5 @@
 use crate::api::FuturesAccountInfo;
 use crate::utils::hmac_sha256;
-use crate::BinanceTrade;
 use crate::Message;
 use crate::Trade;
 use async_stream::stream;
