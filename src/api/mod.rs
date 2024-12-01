@@ -101,6 +101,7 @@ pub struct FuturesPosition {
     pub position_side: String,
     #[serde(rename = "positionAmt")]
     pub position_amt: String,
+    
 }
 #[derive(Debug, Deserialize, Clone)]
 struct BinanceCandle {

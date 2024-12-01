@@ -144,30 +144,7 @@ struct CoinInfo {
     name: String,
     price: f64,
 }
-// 계정 정보를 위한 구조체들
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct FuturesPosition {
-    symbol: String,
-    #[serde(rename = "initialMargin")]
-    initial_margin: String,
-    #[serde(rename = "maintMargin")]
-    maint_margin: String,
-    #[serde(rename = "unrealizedProfit")]
-    unrealized_profit: String,
-    #[serde(rename = "positionInitialMargin")]
-    position_initial_margin: String,
-    leverage: String,
-    isolated: bool,
-    #[serde(rename = "entryPrice")]
-    entry_price: String,
-    #[serde(rename = "maxNotional")]
-    max_notional: String,
-    #[serde(rename = "positionSide")]
-    position_side: String,
-    #[serde(rename = "positionAmt")]
-    position_amt: String,
-}
 #[derive(Debug, Deserialize, Clone)]
 struct CommissionRates {
     maker: String,
@@ -364,30 +341,6 @@ impl RTarde {
         .width(Length::Fixed(100.0));
 
         let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            let avg_price = self
-                .average_prices
-                .get(&self.selected_coin)
-                .copied()
-                .unwrap_or(0.0);
-            let profit_percentage = if avg_price > 0.0 {
-                ((info.price - avg_price) / avg_price * 100.0)
-            } else {
-                0.0
-            };
-
-            let profit_color = if profit_percentage >= 0.0 {
-                Color::from_rgb(0.0, 0.8, 0.0)
-            } else {
-                Color::from_rgb(0.8, 0.0, 0.0)
-            };
-
-            let position_info = self.account_info.as_ref().and_then(|account| {
-                account
-                    .positions
-                    .iter()
-                    .find(|pos| pos.symbol == format!("{}USDT", self.selected_coin))
-            });
-
             Column::new()
                 .spacing(10)
                 .push(
@@ -408,70 +361,10 @@ impl RTarde {
                         .padding(15)
                         .width(Length::Fill),
                 )
-                .push(
-                    Container::new(
-                        Column::new()
-                            .push(
-                                Text::new(format!(
-                                    "valuation profit and loss: {:.2}%",
-                                    profit_percentage
-                                ))
-                                .size(20)
-                                .color(profit_color),
-                            )
-                            .push(
-                                Row::new().spacing(10).push(Text::new("position:")).push(
-                                    Text::new(if let Some(pos) = position_info {
-                                        let amt = pos.position_amt.parse::<f64>().unwrap_or(0.0);
-                                        let entry = pos.entry_price.parse::<f64>().unwrap_or(0.0);
-                                        let pnl =
-                                            pos.unrealized_profit.parse::<f64>().unwrap_or(0.0);
-                                        if amt != 0.0 {
-                                            format!(
-                                                "{:.3} (approach: {:.2}, PNL: {:.2})",
-                                                amt, entry, pnl
-                                            )
-                                        } else {
-                                            "doesn't exist".to_string()
-                                        }
-                                    } else {
-                                        "doesn't exist".to_string()
-                                    })
-                                    .size(16),
-                                ),
-                            ),
-                    )
-                    .padding(10)
-                    .width(Length::Fill),
-                )
         } else {
             Column::new().push(Text::new("Loading..."))
         };
-        let position_label = format!("{} Position:", self.selected_coin);
-        let position_text = if let Some(info) = &self.account_info {
-            let symbol = format!("{}USDT", self.selected_coin);
-            if let Some(position) = info.positions.iter().find(|p| p.symbol == symbol) {
-                let amt = position.position_amt.parse::<f64>().unwrap_or(0.0);
-                let entry = position.entry_price.parse::<f64>().unwrap_or(0.0);
-                let pnl = position.unrealized_profit.parse::<f64>().unwrap_or(0.0);
-                if amt != 0.0 {
-                    let direction = if amt > 0.0 { "Long" } else { "Short" };
-                    format!(
-                        "{} {:.8} @ {:.2} (PNL: {:.2})",
-                        direction,
-                        amt.abs(),
-                        entry,
-                        pnl
-                    )
-                } else {
-                    "No Position".to_string()
-                }
-            } else {
-                "No Position".to_string()
-            }
-        } else {
-            "Loading...".to_string()
-        };
+
         let canvas = Canvas::new(Chart::new(
             self.candlesticks.clone(),
             self.selected_candle_type.clone(),
@@ -596,7 +489,7 @@ impl RTarde {
                     .push(
                         Row::new()
                             .spacing(10)
-                            .push(Text::new(format!("{} Position:", self.selected_coin)).size(16)) // 직접 format
+                            .push(Text::new(format!("Position:")).size(16)) // 직접 format
                             .push(
                                 Text::new(if let Some(info) = &self.account_info {
                                     let symbol = format!("{}USDT", self.selected_coin);
@@ -611,6 +504,7 @@ impl RTarde {
                                             .unrealized_profit
                                             .parse::<f64>()
                                             .unwrap_or(0.0);
+
                                         if amt != 0.0 {
                                             let direction =
                                                 if amt > 0.0 { "Long" } else { "Short" };
@@ -632,6 +526,112 @@ impl RTarde {
                                 })
                                 .size(16),
                             ),
+                    )
+                    .push(
+                        Row::new().push(Text::new("Size:").size(16)).push(
+                            Text::new(
+                                if let Some(info) = self.coin_list.get(&self.selected_coin) {
+                                    let current_price = info.price; // 현재 마켓 가격
+
+                                    if let Some(position) =
+                                        self.account_info.as_ref().and_then(|account| {
+                                            account.positions.iter().find(|p| {
+                                                p.symbol == format!("{}USDT", self.selected_coin)
+                                            })
+                                        })
+                                    {
+                                        let amt =
+                                            position.position_amt.parse::<f64>().unwrap_or(0.0);
+                                        let size = amt * current_price; // Position Amount * Current Price
+                                        if size != 0.0 {
+                                            format!("{:.6} USDT", size)
+                                        } else {
+                                            "No Position".to_string()
+                                        }
+                                    } else {
+                                        "No Position".to_string()
+                                    }
+                                } else {
+                                    "Loading...".to_string()
+                                },
+                            )
+                            .size(16),
+                        ),
+                    )
+                    .push(
+                        Row::new().push(Text::new("Entry Price:").size(16)).push(
+                            Text::new(if let Some(info) = &self.account_info {
+                                let symbol = format!("{}USDT", self.selected_coin);
+                                if let Some(position) =
+                                    info.positions.iter().find(|p| p.symbol == symbol)
+                                {
+                                    let entry_price =
+                                        position.entry_price.parse::<f64>().unwrap_or(0.0);
+                                    if entry_price > 0.0 {
+                                        format!("{:.6}", entry_price)
+                                    } else {
+                                        "No Position".to_string()
+                                    }
+                                } else {
+                                    "No Position".to_string()
+                                }
+                            } else {
+                                "Loading...".to_string()
+                            })
+                            .size(16),
+                        ),
+                    )
+                    .push(
+                        Row::new().push(Text::new(format!("ROE:")).size(16)).push(
+                            Text::new(if let Some(info) = &self.account_info {
+                                let symbol = format!("{}USDT", self.selected_coin);
+                                if let Some(position) =
+                                    info.positions.iter().find(|p| p.symbol == symbol)
+                                {
+                                    let initial_margin =
+                                        position.initial_margin.parse::<f64>().unwrap_or(1.0);
+                                    let unrealized_profit =
+                                        position.unrealized_profit.parse::<f64>().unwrap_or(0.0);
+
+                                    if initial_margin != 0.0 {
+                                        let roe = (unrealized_profit / initial_margin) * 100.0;
+                                        format!("{:.2}%", roe)
+                                    } else {
+                                        "0.00%".to_string()
+                                    }
+                                } else {
+                                    "No Position".to_string()
+                                }
+                            } else {
+                                "Loading...".to_string()
+                            })
+                            .size(16)
+                            .color(
+                                if let Some(info) = &self.account_info {
+                                    if let Some(position) = info
+                                        .positions
+                                        .iter()
+                                        .find(|p| p.symbol == format!("{}USDT", self.selected_coin))
+                                    {
+                                        let roe = position
+                                            .unrealized_profit
+                                            .parse::<f64>()
+                                            .unwrap_or(0.0)
+                                            / position.initial_margin.parse::<f64>().unwrap_or(1.0)
+                                            * 100.0;
+                                        if roe >= 0.0 {
+                                            Color::from_rgb(0.0, 0.8, 0.0) // 이익일 때 초록색
+                                        } else {
+                                            Color::from_rgb(0.8, 0.0, 0.0) // 손실일 때 빨간색
+                                        }
+                                    } else {
+                                        Color::from_rgb(0.5, 0.5, 0.5) // 포지션 없을 때 회색
+                                    }
+                                } else {
+                                    Color::from_rgb(0.5, 0.5, 0.5)
+                                },
+                            ),
+                        ),
                     ),
             ));
 
@@ -664,16 +664,29 @@ impl RTarde {
             Message::MarketBuy => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
                     if let Some(account_info) = &self.account_info {
+                        let symbol = format!("{}USDT", self.selected_coin);
                         let price = info.price;
-                        let fixed_usdt = 5.5; // 5.5 USDT로 고정
+                        let fixed_usdt = 5.5;
 
-                        // 매수 수량 계산 (USDT / 현재가)
-                        let quantity = fixed_usdt / price;
+                        // 현재 포지션 확인
+                        let additional_quantity = if let Some(position) =
+                            account_info.positions.iter().find(|p| p.symbol == symbol)
+                        {
+                            let current_position =
+                                position.position_amt.parse::<f64>().unwrap_or(0.0);
+                            if current_position < 0.0 {
+                                current_position.abs()
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
 
-                        // 수량이 0보다 큰지 확인
-                        if quantity > 0.0 {
-                            println!("Calculated quantity: {}", quantity); // 디버그용
+                        // let base_quantity = fixed_usdt / price;
+                        let total_quantity = additional_quantity;
 
+                        if total_quantity > 0.0 {
                             let selected_coin = self.selected_coin.clone();
                             let alert_sender = self.alert_sender.clone();
 
@@ -683,34 +696,26 @@ impl RTarde {
                                     selected_coin.clone(),
                                     TradeType::Buy,
                                     price,
-                                    quantity,
+                                    total_quantity,
                                     alert_sender,
                                 )
                                 .await
                                 {
-                                    println!("시장가 매수 실패: {:?}", e);
+                                    println!("order fail: {:?}", e);
                                 }
                             });
 
                             self.add_alert(
                                 format!(
-                                    "시장가 매수(롱) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT",
-                                    quantity, self.selected_coin, fixed_usdt
+                                    "Market buy (long) attempt:\nQuantity: {:.8} {}\nEstimated cost: {:.4} USDT\nAdditional quantity for position close: {:.8}",
+                                    total_quantity, self.selected_coin, fixed_usdt, additional_quantity
                                 ),
                                 AlertType::Info,
-                            );
-                        } else {
-                            self.add_alert(
-                                format!(
-                                    "주문 실패: 계산된 수량이 너무 작습니다 (가격: {} USDT)",
-                                    price
-                                ),
-                                AlertType::Error,
                             );
                         }
                     } else {
                         self.add_alert(
-                            "계정 정보를 불러올 수 없습니다.".to_string(),
+                            "Account information cannot be registered.".to_string(),
                             AlertType::Error,
                         );
                     }
@@ -720,16 +725,30 @@ impl RTarde {
             Message::MarketSell => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
                     if let Some(account_info) = &self.account_info {
+                        let symbol = format!("{}USDT", self.selected_coin);
                         let price = info.price;
-                        let fixed_usdt = 5.5; // 5.5 USDT로 고정
+                        let fixed_usdt = 5.5;
 
-                        // 매도 수량 계산 (USDT / 현재가)
-                        let quantity = fixed_usdt / price;
+                        // 현재 포지션 확인
+                        let additional_quantity = if let Some(position) =
+                            account_info.positions.iter().find(|p| p.symbol == symbol)
+                        {
+                            let current_position =
+                                position.position_amt.parse::<f64>().unwrap_or(0.0);
+                            if current_position > 0.0 {
+                                current_position.abs()
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
 
-                        // 수량이 0보다 큰지 확인
-                        if quantity > 0.0 {
-                            println!("Calculated quantity: {}", quantity); // 디버그용
+                        let base_quantity = fixed_usdt / price;
+                        // let total_quantity = base_quantity + additional_quantity;
+                        let total_quantity = additional_quantity;
 
+                        if total_quantity > 0.0 {
                             let selected_coin = self.selected_coin.clone();
                             let alert_sender = self.alert_sender.clone();
 
@@ -739,7 +758,7 @@ impl RTarde {
                                     selected_coin.clone(),
                                     TradeType::Sell,
                                     price,
-                                    quantity,
+                                    total_quantity,
                                     alert_sender,
                                 )
                                 .await
@@ -750,18 +769,10 @@ impl RTarde {
 
                             self.add_alert(
                                 format!(
-                                    "시장가 매도(숏) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT",
-                                    quantity, self.selected_coin, fixed_usdt
+                                    "시장가 매도(숏) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT\n포지션 청산을 위한 추가 수량: {:.8}",
+                                    total_quantity, self.selected_coin, fixed_usdt, additional_quantity
                                 ),
                                 AlertType::Info,
-                            );
-                        } else {
-                            self.add_alert(
-                                format!(
-                                    "주문 실패: 계산된 수량이 너무 작습니다 (가격: {} USDT)",
-                                    price
-                                ),
-                                AlertType::Error,
                             );
                         }
                     } else {
@@ -901,6 +912,7 @@ impl RTarde {
             }
             Message::UpdateAccountInfo(info) => {
                 self.account_info = Some(info);
+                println!("{:?}", self.account_info);
             }
             Message::UpdatePositions(positions) => {
                 self.positions = positions;

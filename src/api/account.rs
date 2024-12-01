@@ -4,14 +4,10 @@ use crate::Message;
 use crate::Trade;
 use async_stream::stream;
 use futures_util::Stream; // Add this at the top with other imports
-use iced::futures::{channel::mpsc, StreamExt};
-use iced::time::{self, Duration, Instant};
-use std::collections::{BTreeMap, HashMap};
+
 use std::env;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
 pub fn binance_account_connection() -> impl Stream<Item = Message> {
     stream! {
-        println!("Starting binance futures account connection...");
 
         let api_key = match env::var("BINANCE_API_KEY") {
             Ok(key) => {
@@ -67,9 +63,9 @@ pub fn binance_account_connection() -> impl Stream<Item = Message> {
 
                         match serde_json::from_str::<FuturesAccountInfo>(&text) {
                             Ok(account_info) => {
-                                // println!("Successfully parsed futures account info");
                                 // 계정 정보 업데이트
                                 for position in &account_info.positions {
+                                    println!("this:{:?}",position);
                                     if position.position_amt.parse::<f64>().unwrap_or(0.0) != 0.0 {
                                         let trades_query = format!(
                                             "symbol={}&limit=100&timestamp={}",
