@@ -503,36 +503,6 @@ impl RTarde {
                                 .color(profit_color),
                             )
                             .push(
-                                Row::new()
-                                    .spacing(10)
-                                    .push(Text::new("account balance:"))
-                                    .push(
-                                        Text::new(if let Some(account) = &self.account_info {
-                                            if let Some(asset) =
-                                                account.assets.iter().find(|a| a.asset == "USDT")
-                                            {
-                                                let available = asset
-                                                    .available_balance
-                                                    .parse::<f64>()
-                                                    .unwrap_or(0.0);
-                                                let unrealized = asset
-                                                    .unrealized_profit
-                                                    .parse::<f64>()
-                                                    .unwrap_or(0.0);
-                                                format!(
-                                                    "{:.2} USDT (unrealized: {:.2})",
-                                                    available, unrealized
-                                                )
-                                            } else {
-                                                "0.00 USDT".to_string()
-                                            }
-                                        } else {
-                                            "Loading...".to_string()
-                                        })
-                                        .size(16),
-                                    ),
-                            )
-                            .push(
                                 Row::new().spacing(10).push(Text::new("position:")).push(
                                     Text::new(if let Some(pos) = position_info {
                                         let amt = pos.position_amt.parse::<f64>().unwrap_or(0.0);
@@ -652,8 +622,30 @@ impl RTarde {
                                     "Loading...".to_string()
                                 })
                                 .size(16),
-                            ),
-                    ),
+                            ), // .push(Text::new("account Balance:"))
+                               // .push(
+                               //     Text::new(if let Some(account) = &self.account_info {
+                               //         if let Some(asset) =
+                               //             account.assets.iter().find(|a| a.asset == "USDT")
+                               //         {
+                               //             let available =
+                               //                 asset.available_balance.parse::<f64>().unwrap_or(0.0);
+                               //             let unrealized =
+                               //                 asset.unrealized_profit.parse::<f64>().unwrap_or(0.0);
+                               //             format!(
+                               //                 "{:.2} USDT (unrealized: {:.2})",
+                               //                 available, unrealized
+                               //             )
+                               //         } else {
+                               //             "0.00 USDT".to_string()
+                               //         }
+                               //     } else {
+                               //         "Loading...".to_string()
+                               //     })
+                               //     .size(16),
+                               // ),
+                    )
+                    .push(Row::new().push(Text::new("account Balance:"))),
             )
             .push(
                 Container::new(Text::new("Order").size(24))
@@ -679,42 +671,8 @@ impl RTarde {
                             ),
                     ),
             )
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("Limit Order").size(16))
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(text_input("Enter price...", ""))
-                            .push(Text::new("USDT")),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(text_input("Enter quantity...", ""))
-                            .push(Text::new(self.selected_coin.clone())),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(button(Text::new("Long Limit")).width(Length::Fill))
-                            .push(button(Text::new("Short Limit")).width(Length::Fill)),
-                    ),
-            )
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("Position Size").size(16))
-                    .push(
-                        Row::new()
-                            .spacing(5)
-                            .push(button(Text::new("10%")).width(Length::Fill))
-                            .push(button(Text::new("25%")).width(Length::Fill))
-                            .push(button(Text::new("50%")).width(Length::Fill))
-                            .push(button(Text::new("100%")).width(Length::Fill)),
-                    ),
-            )
+         
+       
             .push(Space::with_height(Length::Fill))
             .push(Container::new(
                 Column::new()
