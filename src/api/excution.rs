@@ -1,19 +1,13 @@
 use crate::adjust_precision;
-use crate::api::FuturesAccountInfo;
 use crate::get_symbol_info;
 use crate::utils::hmac_sha256;
 use crate::AlertType;
-
 use crate::TradeType;
-
 use futures_util::SinkExt;
-use futures_util::Stream; // Add this at the top with other imports
 use iced::futures::{channel::mpsc, StreamExt};
 use iced::time::{self, Duration, Instant};
-use reqwest::Url;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
 pub async fn execute_trade(
     selected_coin: String,
     trade_type: TradeType,
@@ -57,14 +51,31 @@ pub async fn execute_trade(
         .header("X-MBX-APIKEY", &api_key)
         .send()
         .await?;
-
+    println!("Response Status: {:?}", response.status());
+    println!("Response Headers: {:?}", response.headers());
     let status = response.status();
     println!("Response status: {}", status);
 
     // 응답 텍스트 얻기
     let response_text = response.text().await?;
-    println!("Response body: {}", response_text);
-
+    println!("Raw Response Body: {}", response_text);
+    match serde_json::from_str::<serde_json::Value>(&response_text) {
+        Ok(json) => {
+            println!("Parsed JSON Response: {:#?}", json);
+            // JSON의 각 필드 확인
+            println!("Fields:");
+            if let Some(order_id) = json.get("orderId") {
+                println!("- orderId: {:?}", order_id);
+            }
+            if let Some(executed_qty) = json.get("executedQty") {
+                println!("- executedQty: {:?}", executed_qty);
+            }
+            if let Some(avg_price) = json.get("avgPrice") {
+                println!("- avgPrice: {:?}", avg_price);
+            }
+        }
+        Err(e) => println!("Failed to parse JSON: {}", e),
+    };
     if status.is_success() {
         let result: serde_json::Value = serde_json::from_str(&response_text)?;
 

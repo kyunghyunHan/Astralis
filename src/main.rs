@@ -816,17 +816,17 @@ impl RTarde {
                     if let Some(account_info) = &self.account_info {
                         let price = info.price;
                         let fixed_usdt = 5.5; // 5.5 USDT로 고정
-
+            
                         // 매수 수량 계산 (USDT / 현재가)
                         let quantity = fixed_usdt / price;
-
+            
                         // 수량이 0보다 큰지 확인
                         if quantity > 0.0 {
                             println!("Calculated quantity: {}", quantity); // 디버그용
-
+            
                             let selected_coin = self.selected_coin.clone();
                             let alert_sender = self.alert_sender.clone();
-
+            
                             let runtime = tokio::runtime::Handle::current();
                             runtime.spawn(async move {
                                 if let Err(e) = execute_trade(
@@ -841,10 +841,10 @@ impl RTarde {
                                     println!("시장가 매수 실패: {:?}", e);
                                 }
                             });
-
+            
                             self.add_alert(
                                 format!(
-                                    "시장가 매수 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT",
+                                    "시장가 매수(롱) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT",
                                     quantity, self.selected_coin, fixed_usdt
                                 ),
                                 AlertType::Info,
@@ -866,64 +866,59 @@ impl RTarde {
                     }
                 }
             }
+            
             Message::MarketSell => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
-                    // 현재 선택된 코인의 포지션 확인
                     if let Some(account_info) = &self.account_info {
-                        let symbol = format!("{}USDT", self.selected_coin);
-                        if let Some(position) = account_info
-                            .positions
-                            .iter()
-                            .find(|pos| pos.symbol == symbol)
-                        {
-                            if let Ok(position_amount) = position.position_amt.parse::<f64>() {
-                                if position_amount != 0.0 {
-                                    let price = info.price;
-                                    let selected_coin = self.selected_coin.clone();
-                                    let alert_sender = self.alert_sender.clone();
-                                    let amount = position_amount.abs(); // 포지션 크기의 절대값
-
-                                    let runtime = tokio::runtime::Handle::current();
-                                    runtime.spawn(async move {
-                                        if let Err(e) = execute_trade(
-                                            selected_coin.clone(),
-                                            TradeType::Sell,
-                                            price,
-                                            amount,
-                                            alert_sender,
-                                        )
-                                        .await
-                                        {
-                                            println!("시장가 매도 실패: {:?}", e);
-                                        }
-                                    });
-
-                                    self.add_alert(
-                                        format!(
-                                            "전체 포지션 청산 시도: {:.8} {}",
-                                            amount, self.selected_coin
-                                        ),
-                                        AlertType::Info,
-                                    );
-                                } else {
-                                    self.add_alert(
-                                        format!(
-                                            "매도 실패: {} 포지션이 없습니다",
-                                            self.selected_coin
-                                        ),
-                                        AlertType::Error,
-                                    );
+                        let price = info.price;
+                        let fixed_usdt = 5.5; // 5.5 USDT로 고정
+            
+                        // 매도 수량 계산 (USDT / 현재가)
+                        let quantity = fixed_usdt / price;
+            
+                        // 수량이 0보다 큰지 확인
+                        if quantity > 0.0 {
+                            println!("Calculated quantity: {}", quantity); // 디버그용
+            
+                            let selected_coin = self.selected_coin.clone();
+                            let alert_sender = self.alert_sender.clone();
+            
+                            let runtime = tokio::runtime::Handle::current();
+                            runtime.spawn(async move {
+                                if let Err(e) = execute_trade(
+                                    selected_coin.clone(),
+                                    TradeType::Sell,
+                                    price,
+                                    quantity,
+                                    alert_sender,
+                                )
+                                .await
+                                {
+                                    println!("시장가 매도 실패: {:?}", e);
                                 }
-                            }
+                            });
+            
+                            self.add_alert(
+                                format!(
+                                    "시장가 매도(숏) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT",
+                                    quantity, self.selected_coin, fixed_usdt
+                                ),
+                                AlertType::Info,
+                            );
                         } else {
                             self.add_alert(
                                 format!(
-                                    "매도 실패: {} 포지션을 찾을 수 없습니다",
-                                    self.selected_coin
+                                    "주문 실패: 계산된 수량이 너무 작습니다 (가격: {} USDT)",
+                                    price
                                 ),
                                 AlertType::Error,
                             );
                         }
+                    } else {
+                        self.add_alert(
+                            "계정 정보를 불러올 수 없습니다.".to_string(),
+                            AlertType::Error,
+                        );
                     }
                 }
             }
