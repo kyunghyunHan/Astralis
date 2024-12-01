@@ -429,10 +429,8 @@ impl RTarde {
             .width(Length::Fixed(150.0));
 
         let candle_types = vec![CandleType::Minute1, CandleType::Minute3, CandleType::Day];
-        let candle_type_strings: Vec<String> = candle_types
-            .iter()
-            .map(|ct| ct.to_string())
-            .collect();
+        let candle_type_strings: Vec<String> =
+            candle_types.iter().map(|ct| ct.to_string()).collect();
         let candle_type_picker = pick_list(
             candle_type_strings,
             Some(self.selected_candle_type.to_string()),
@@ -522,7 +520,7 @@ impl RTarde {
                                                     .parse::<f64>()
                                                     .unwrap_or(0.0);
                                                 format!(
-                                                    "{:.2} USDT (미실현: {:.2})",
+                                                    "{:.2} USDT (unrealized: {:.2})",
                                                     available, unrealized
                                                 )
                                             } else {
@@ -535,7 +533,7 @@ impl RTarde {
                                     ),
                             )
                             .push(
-                                Row::new().spacing(10).push(Text::new("포지션:")).push(
+                                Row::new().spacing(10).push(Text::new("position:")).push(
                                     Text::new(if let Some(pos) = position_info {
                                         let amt = pos.position_amt.parse::<f64>().unwrap_or(0.0);
                                         let entry = pos.entry_price.parse::<f64>().unwrap_or(0.0);
@@ -543,14 +541,14 @@ impl RTarde {
                                             pos.unrealized_profit.parse::<f64>().unwrap_or(0.0);
                                         if amt != 0.0 {
                                             format!(
-                                                "{:.3} (진입: {:.2}, PNL: {:.2})",
+                                                "{:.3} (approach: {:.2}, PNL: {:.2})",
                                                 amt, entry, pnl
                                             )
                                         } else {
-                                            "없음".to_string()
+                                            "doesn't exist".to_string()
                                         }
                                     } else {
-                                        "없음".to_string()
+                                        "doesn't exist".to_string()
                                     })
                                     .size(16),
                                 ),
@@ -816,17 +814,17 @@ impl RTarde {
                     if let Some(account_info) = &self.account_info {
                         let price = info.price;
                         let fixed_usdt = 5.5; // 5.5 USDT로 고정
-            
+
                         // 매수 수량 계산 (USDT / 현재가)
                         let quantity = fixed_usdt / price;
-            
+
                         // 수량이 0보다 큰지 확인
                         if quantity > 0.0 {
                             println!("Calculated quantity: {}", quantity); // 디버그용
-            
+
                             let selected_coin = self.selected_coin.clone();
                             let alert_sender = self.alert_sender.clone();
-            
+
                             let runtime = tokio::runtime::Handle::current();
                             runtime.spawn(async move {
                                 if let Err(e) = execute_trade(
@@ -841,7 +839,7 @@ impl RTarde {
                                     println!("시장가 매수 실패: {:?}", e);
                                 }
                             });
-            
+
                             self.add_alert(
                                 format!(
                                     "시장가 매수(롱) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT",
@@ -866,23 +864,23 @@ impl RTarde {
                     }
                 }
             }
-            
+
             Message::MarketSell => {
                 if let Some(info) = self.coin_list.get(&self.selected_coin) {
                     if let Some(account_info) = &self.account_info {
                         let price = info.price;
                         let fixed_usdt = 5.5; // 5.5 USDT로 고정
-            
+
                         // 매도 수량 계산 (USDT / 현재가)
                         let quantity = fixed_usdt / price;
-            
+
                         // 수량이 0보다 큰지 확인
                         if quantity > 0.0 {
                             println!("Calculated quantity: {}", quantity); // 디버그용
-            
+
                             let selected_coin = self.selected_coin.clone();
                             let alert_sender = self.alert_sender.clone();
-            
+
                             let runtime = tokio::runtime::Handle::current();
                             runtime.spawn(async move {
                                 if let Err(e) = execute_trade(
@@ -897,7 +895,7 @@ impl RTarde {
                                     println!("시장가 매도 실패: {:?}", e);
                                 }
                             });
-            
+
                             self.add_alert(
                                 format!(
                                     "시장가 매도(숏) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT",

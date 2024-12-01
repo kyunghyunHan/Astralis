@@ -5,8 +5,7 @@ use crate::AlertType;
 use crate::TradeType;
 use futures_util::SinkExt;
 use iced::futures::{channel::mpsc, StreamExt};
-use iced::time::{self, Duration, Instant};
-use std::collections::{BTreeMap, HashMap};
+
 use std::env;
 pub async fn execute_trade(
     selected_coin: String,
@@ -84,7 +83,7 @@ pub async fn execute_trade(
         let order_id = result["orderId"].as_u64().unwrap_or(0);
 
         let message = format!(
-            "{} 주문 성공 (주문번호: {}):\n수량: {} {}\n평균가격: {} USDT\n총액: {:.2} USDT",
+            "{} order success (order number: {}):\nquantity: {} {}\nAverage price: {} USDT\nTotal amount: {:.2} USDT",
             match trade_type {
                 TradeType::Buy => "롱",
                 TradeType::Sell => "숏",
@@ -110,7 +109,7 @@ pub async fn execute_trade(
 
         Ok(())
     } else {
-        let error_message = format!("주문 실패: {}", response_text);
+        let error_message = format!("order failed: {}", response_text);
         println!("Order failed: {}", error_message);
 
         alert_sender
