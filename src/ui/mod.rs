@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, VecDeque};
 pub mod chart;
 use iced::Point;
+pub mod buttons;
+pub mod side_bar;
 
 pub struct Chart {
     pub candlesticks: VecDeque<(u64, Candlestick)>, // BTreeMap에서 VecDeque로 변경

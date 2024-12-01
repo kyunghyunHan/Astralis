@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use ui::buttons::ma_controls;
 use ui::{chart::calculate_knn_signals, CandleType, Candlestick, Chart, ChartState};
 
 /*===============STRUCT LINE================= */
@@ -261,6 +262,7 @@ impl Default for RTarde {
         }
     }
 }
+
 impl RTarde {
     fn binance_account_subscription(&self) -> Subscription<Message> {
         Subscription::run(binance_account_connection)
@@ -279,28 +281,7 @@ impl RTarde {
     }
 
     pub fn view(&self) -> Element<Message> {
-        let ma_controls = Container::new(
-            Column::new()
-                .spacing(5)
-                .push(
-                    Row::new()
-                        .spacing(10)
-                        .push(checkbox("MA5", self.show_ma5).on_toggle(|_| Message::ToggleMA5))
-                        .push(checkbox("MA10", self.show_ma10).on_toggle(|_| Message::ToggleMA10)),
-                )
-                .push(
-                    Row::new()
-                        .spacing(10)
-                        .push(checkbox("MA20", self.show_ma20).on_toggle(|_| Message::ToggleMA20))
-                        .push(
-                            checkbox("MA200", self.show_ma200).on_toggle(|_| Message::ToggleMA200),
-                        ),
-                )
-                .push(Row::new().spacing(10).push(
-                    checkbox("KNN prediction", self.knn_enabled).on_toggle(|_| Message::ToggleKNN),
-                )),
-        )
-        .padding(10);
+        let ma_controls = ma_controls(&self);
 
         let prediction_display = Container::new(Column::new().push(
             if let Some(alert) = self.alerts.front() {
