@@ -4,7 +4,7 @@ use crate::utils::hmac_sha256;
 use crate::AlertType;
 use crate::TradeType;
 use futures_util::SinkExt;
-use iced::futures::{channel::mpsc, StreamExt};
+use iced::futures::channel::mpsc;
 
 use std::env;
 pub async fn execute_trade(

@@ -92,11 +92,11 @@ pub enum Message {
     SelectCandleType(CandleType),
     Error,
     WebSocketInit(mpsc::Sender<String>),
-    UpdatePrice(String, f64, f64),
-    ToggleMA5,
-    ToggleMA10,
-    ToggleMA20,
-    ToggleMA200,
+    UpdatePrice(String, f64, f64),                 //가격업데이트
+    ToggleMA5,                                     //5일 이동평균선
+    ToggleMA10,                                    //10일 이동평균선
+    ToggleMA20,                                    //20일 이동평균선
+    ToggleMA200,                                   //200일 이동평균선
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
     ToggleKNN,                                     // KNN 시스템 켜기/끄기

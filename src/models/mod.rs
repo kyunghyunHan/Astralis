@@ -1,6 +1,5 @@
 pub mod account;
 pub mod knn;
-pub mod market;
 use std::collections::VecDeque;
 
 // KNN 예측기 최적화 버전
