@@ -1,17 +1,15 @@
 use crate::Message;
 use crate::RTarde;
-
+use iced::widget::button::Status;
+use iced::widget::button::Style;
+use iced::Background;
+use iced::Border;
+use iced::Shadow;
 use iced::{
-    widget::{
-        button,
-        canvas::{
-            event::{self, Event},
-            Canvas, Program,
-        },
-        checkbox, container, pick_list, Column, Container, Row, Space, Text,
-    },
-    Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
+    widget::{button, checkbox, Column, Container, Row, Text},
+    Color, Length,
 };
+const BUTTON_ROUND: f32 = 10.;
 pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
     Column::new()
         .spacing(10)
@@ -22,11 +20,55 @@ pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
                 .push(
                     button(Text::new("Long Market"))
                         .width(Length::Fill)
+                        .style(|_, status| {
+                            if status != Status::Hovered {
+                                Style {
+                                    background: Some(Background::Color(Color::from_rgb(
+                                        0.1, 0.3, 0.7,
+                                    ))),
+                                    text_color: Color::WHITE,
+                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    shadow: Shadow::default(),
+                                }
+                            } else {
+                                Style {
+                                    background: Some(Background::Color(Color::from_rgb(
+                                        0.3, 0.5, 0.8,
+                                    ))),
+                                    text_color: Color::WHITE,
+                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    shadow: Shadow::default(),
+                                }
+                            }
+                        })
                         .on_press(Message::MarketBuy),
                 )
                 .push(
                     button(Text::new("Short Market"))
                         .width(Length::Fill)
+                        .style(|_, status| {
+                            if status != Status::Hovered {
+                                // 기본 상태: 어두운 빨간색
+                                Style {
+                                    background: Some(Background::Color(Color::from_rgb(
+                                        0.7, 0.1, 0.1, // 어두운 빨간색
+                                    ))),
+                                    text_color: Color::WHITE,
+                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    shadow: Shadow::default(),
+                                }
+                            } else {
+                                // 호버 상태: 밝은 빨간색
+                                Style {
+                                    background: Some(Background::Color(Color::from_rgb(
+                                        0.9, 0.3, 0.3, // 밝은 빨간색
+                                    ))),
+                                    text_color: Color::WHITE,
+                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    shadow: Shadow::default(),
+                                }
+                            }
+                        })
                         .on_press(Message::MarketSell),
                 ),
         )
