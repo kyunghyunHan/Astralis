@@ -5,39 +5,30 @@ mod api;
 mod models;
 mod ui;
 mod utils;
-use api::FuturesAccountInfo;
 use api::{
     account::binance_account_connection,
     binance::{binance_connection, fetch_candles, fetch_candles_async, get_top_volume_pairs},
     excution::execute_trade,
-    BinanceTrade,
+    BinanceTrade, FuturesAccountInfo,
 };
-use iced::futures::channel::mpsc;
-use iced::time::{self, Duration, Instant};
-use iced::widget::Row;
-use iced::Length::FillPortion;
 use iced::{
-    widget::{
-        canvas::{
-            event::{self, Event},
-            Canvas, Program,
-        },
-        checkbox, container, pick_list, Column, Container, Space, Text,
-    },
-    Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
+    futures::channel::mpsc,
+    time::{Duration, Instant},
+    widget::{canvas::Canvas, checkbox, container, pick_list, Column, Container, Row, Text},
+    Color, Element, Length,
+    Length::FillPortion,
+    Size, Subscription,
 };
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use ui::trading::order_buttons;
+use serde::Deserialize;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use ui::{
     buttons::ma_controls,
-    infos::{account_info, coin_info},
+    chart::calculate_knn_signals,
+    infos::{account_info, coin_info, current_position},
+    trading::{auto_trading_toggle, order_buttons},
+    CandleType, Candlestick, Chart, ChartState,
 };
-use ui::{chart::calculate_knn_signals, CandleType, Candlestick, Chart, ChartState};
 
-/*===============STRUCT LINE================= */
 pub struct RTarde {
     candlesticks: BTreeMap<u64, Candlestick>,
     selected_coin: String,
@@ -56,13 +47,10 @@ pub struct RTarde {
     knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
     account_info: Option<FuturesAccountInfo>,
-    positions: Vec<Position>,
     alerts: VecDeque<Alert>,
-    alert_timeout: Option<Instant>,
     auto_trading_enabled: bool,       // 자동매매 활성화 상태
     last_trade_time: Option<Instant>, // 마지막 거래 시간 (과도한 거래 방지용)
     alert_sender: mpsc::Sender<(String, AlertType)>,
-    alert_receiver: mpsc::Receiver<(String, AlertType)>,
     average_prices: HashMap<String, f64>,
 }
 #[derive(Debug, Clone)]
@@ -121,7 +109,6 @@ pub enum Message {
         indicators: TradeIndicators,
     },
     UpdateAccountInfo(FuturesAccountInfo),
-    UpdatePositions(Vec<Position>),
     FetchError(String),
     AddAlert(String, AlertType),
     RemoveAlert,
@@ -138,56 +125,21 @@ enum TradeType {
 }
 
 #[derive(Debug, Clone)]
-pub enum ScrollDirection {
-    Left,
-    Right,
-}
-#[derive(Debug, Clone)]
 struct CoinInfo {
     symbol: String,
     name: String,
     price: f64,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-struct CommissionRates {
-    maker: String,
-    taker: String,
-    buyer: String,
-    seller: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct Balance {
-    asset: String,
-    free: String,
-    locked: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct Position {
-    symbol: String,
-    #[serde(rename = "positionAmt")]
-    position_amt: String,
-    #[serde(rename = "entryPrice")]
-    entry_price: String,
-    #[serde(rename = "unrealizedProfit")]
-    unrealized_profit: String,
-    #[serde(rename = "liquidationPrice")]
-    liquidation_price: String,
-    leverage: String,
-}
-
 // 거래 지표 정보를 담는 구조체
 #[derive(Debug, Clone)]
-struct TradeIndicators {
+pub struct TradeIndicators {
     rsi: f32,
     ma5: f32,
     ma20: f32,
     volume_ratio: f32,
 }
 
-/*===============RTarde LINE================= */
 impl Default for RTarde {
     fn default() -> Self {
         // 거래량 상위 20개 코인 가져오기
@@ -254,13 +206,10 @@ impl Default for RTarde {
             knn_buy_signals: BTreeMap::new(),
             knn_sell_signals: BTreeMap::new(),
             account_info: None,
-            positions: Vec::new(),
             alerts: VecDeque::with_capacity(5),
-            alert_timeout: None,
             auto_trading_enabled: false,
             last_trade_time: None,
             alert_sender,
-            alert_receiver,
             average_prices: HashMap::new(),
         }
     }
@@ -341,31 +290,10 @@ impl RTarde {
         .width(iced::Fill)
         .height(Length::from(800));
 
-        let auto_trading_toggle = Container::new(
-            Row::new()
-                .spacing(10)
-                .push(
-                    checkbox("Auto trading", self.auto_trading_enabled)
-                        .on_toggle(|_| Message::ToggleAutoTrading),
-                )
-                .push(
-                    Text::new(if self.auto_trading_enabled {
-                        "Auto trading on"
-                    } else {
-                        "Auto trading off"
-                    })
-                    .size(14)
-                    .color(if self.auto_trading_enabled {
-                        Color::from_rgb(0.0, 0.8, 0.0)
-                    } else {
-                        Color::from_rgb(0.5, 0.5, 0.5)
-                    }),
-                ),
-        )
-        .padding(10)
-        .width(Length::Fill);
+        let auto_trading_toggle = auto_trading_toggle(&self);
         let account_info = account_info(&self);
         let order_buttons = order_buttons(&self);
+        let current_position = current_position(&self);
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
@@ -373,179 +301,7 @@ impl RTarde {
             .push(account_info)
             .push(order_buttons)
             // .push(Space::with_height(Length::Fill))
-            .push(Container::new(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("Current Positions").size(16))
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(Text::new("USDT Balance:"))
-                            .push(
-                                Text::new(if let Some(info) = &self.account_info {
-                                    if let Some(asset) =
-                                        info.assets.iter().find(|a| a.asset == "USDT")
-                                    {
-                                        let available =
-                                            asset.available_balance.parse::<f64>().unwrap_or(0.0);
-                                        format!("{:.2}", available)
-                                    } else {
-                                        "0.00".to_string()
-                                    }
-                                } else {
-                                    "Loading...".to_string()
-                                })
-                                .size(16),
-                            ),
-                    )
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(Text::new(format!("Position:")).size(16)) // 직접 format
-                            .push(
-                                Text::new(if let Some(info) = &self.account_info {
-                                    let symbol = format!("{}USDT", self.selected_coin);
-                                    if let Some(position) =
-                                        info.positions.iter().find(|p| p.symbol == symbol)
-                                    {
-                                        let amt =
-                                            position.position_amt.parse::<f64>().unwrap_or(0.0);
-                                        let entry =
-                                            position.entry_price.parse::<f64>().unwrap_or(0.0);
-                                        let pnl = position
-                                            .unrealized_profit
-                                            .parse::<f64>()
-                                            .unwrap_or(0.0);
-
-                                        if amt != 0.0 {
-                                            let direction =
-                                                if amt > 0.0 { "Long" } else { "Short" };
-                                            format!(
-                                                "{} {:.8} @ {:.2} (PNL: {:.2})",
-                                                direction,
-                                                amt.abs(),
-                                                entry,
-                                                pnl
-                                            )
-                                        } else {
-                                            "No Position".to_string()
-                                        }
-                                    } else {
-                                        "No Position".to_string()
-                                    }
-                                } else {
-                                    "Loading...".to_string()
-                                })
-                                .size(16),
-                            ),
-                    )
-                    .push(
-                        Row::new().push(Text::new("Size:").size(16)).push(
-                            Text::new(
-                                if let Some(info) = self.coin_list.get(&self.selected_coin) {
-                                    let current_price = info.price; // 현재 마켓 가격
-
-                                    if let Some(position) =
-                                        self.account_info.as_ref().and_then(|account| {
-                                            account.positions.iter().find(|p| {
-                                                p.symbol == format!("{}USDT", self.selected_coin)
-                                            })
-                                        })
-                                    {
-                                        let amt =
-                                            position.position_amt.parse::<f64>().unwrap_or(0.0);
-                                        let size = amt * current_price; // Position Amount * Current Price
-                                        if size != 0.0 {
-                                            format!("{:.6} USDT", size)
-                                        } else {
-                                            "No Position".to_string()
-                                        }
-                                    } else {
-                                        "No Position".to_string()
-                                    }
-                                } else {
-                                    "Loading...".to_string()
-                                },
-                            )
-                            .size(16),
-                        ),
-                    )
-                    .push(
-                        Row::new().push(Text::new("Entry Price:").size(16)).push(
-                            Text::new(if let Some(info) = &self.account_info {
-                                let symbol = format!("{}USDT", self.selected_coin);
-                                if let Some(position) =
-                                    info.positions.iter().find(|p| p.symbol == symbol)
-                                {
-                                    let entry_price =
-                                        position.entry_price.parse::<f64>().unwrap_or(0.0);
-                                    if entry_price > 0.0 {
-                                        format!("{:.6}", entry_price)
-                                    } else {
-                                        "No Position".to_string()
-                                    }
-                                } else {
-                                    "No Position".to_string()
-                                }
-                            } else {
-                                "Loading...".to_string()
-                            })
-                            .size(16),
-                        ),
-                    )
-                    .push(
-                        Row::new().push(Text::new(format!("ROE:")).size(16)).push(
-                            Text::new(if let Some(info) = &self.account_info {
-                                let symbol = format!("{}USDT", self.selected_coin);
-                                if let Some(position) =
-                                    info.positions.iter().find(|p| p.symbol == symbol)
-                                {
-                                    let initial_margin =
-                                        position.initial_margin.parse::<f64>().unwrap_or(1.0);
-                                    let unrealized_profit =
-                                        position.unrealized_profit.parse::<f64>().unwrap_or(0.0);
-
-                                    if initial_margin != 0.0 {
-                                        let roe = (unrealized_profit / initial_margin) * 100.0;
-                                        format!("{:.2}%", roe)
-                                    } else {
-                                        "0.00%".to_string()
-                                    }
-                                } else {
-                                    "No Position".to_string()
-                                }
-                            } else {
-                                "Loading...".to_string()
-                            })
-                            .size(16)
-                            .color(
-                                if let Some(info) = &self.account_info {
-                                    if let Some(position) = info
-                                        .positions
-                                        .iter()
-                                        .find(|p| p.symbol == format!("{}USDT", self.selected_coin))
-                                    {
-                                        let roe = position
-                                            .unrealized_profit
-                                            .parse::<f64>()
-                                            .unwrap_or(0.0)
-                                            / position.initial_margin.parse::<f64>().unwrap_or(1.0)
-                                            * 100.0;
-                                        if roe >= 0.0 {
-                                            Color::from_rgb(0.0, 0.8, 0.0) // 이익일 때 초록색
-                                        } else {
-                                            Color::from_rgb(0.8, 0.0, 0.0) // 손실일 때 빨간색
-                                        }
-                                    } else {
-                                        Color::from_rgb(0.5, 0.5, 0.5) // 포지션 없을 때 회색
-                                    }
-                                } else {
-                                    Color::from_rgb(0.5, 0.5, 0.5)
-                                },
-                            ),
-                        ),
-                    ),
-            ));
+            .push(current_position);
 
         let left_side_bar = Column::new().spacing(20).padding(20).push(coin_info);
 
@@ -840,9 +596,7 @@ impl RTarde {
                 self.account_info = Some(info);
                 println!("{:?}", self.account_info);
             }
-            Message::UpdatePositions(positions) => {
-                self.positions = positions;
-            }
+
             Message::FetchError(error) => {
                 println!("API Error: {}", error);
             }
@@ -856,6 +610,7 @@ impl RTarde {
             }
 
             Message::RemoveAlert => {
+                //알림제거
                 self.alerts.pop_front();
             }
 
