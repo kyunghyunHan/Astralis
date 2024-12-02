@@ -18,7 +18,6 @@ use iced::widget::Row;
 use iced::Length::FillPortion;
 use iced::{
     widget::{
-        button,
         canvas::{
             event::{self, Event},
             Canvas, Program,
@@ -31,7 +30,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use ui::buttons::ma_controls;
+use ui::trading::order_buttons;
+use ui::{
+    buttons::ma_controls,
+    infos::{account_info, coin_info},
+};
 use ui::{chart::calculate_knn_signals, CandleType, Candlestick, Chart, ChartState};
 
 /*===============STRUCT LINE================= */
@@ -320,31 +323,8 @@ impl RTarde {
             },
         )
         .width(Length::Fixed(100.0));
-
-        let current_coin_info = if let Some(info) = self.coin_list.get(&self.selected_coin) {
-            Column::new()
-                .spacing(10)
-                .push(
-                    Container::new(
-                        Column::new()
-                            .push(Text::new(&info.name).size(28).width(Length::Fill))
-                            .push(
-                                Text::new(&info.symbol)
-                                    .size(14)
-                                    .color(Color::from_rgb(0.5, 0.5, 0.5)),
-                            ),
-                    )
-                    .padding(10)
-                    .width(Length::Fill),
-                )
-                .push(
-                    Container::new(Text::new(format!("{:.6} USDT", info.price)).size(32))
-                        .padding(15)
-                        .width(Length::Fill),
-                )
-        } else {
-            Column::new().push(Text::new("Loading..."))
-        };
+        //coin 가격 정보
+        let coin_info = coin_info(&self);
 
         let canvas = Canvas::new(Chart::new(
             self.candlesticks.clone(),
@@ -384,64 +364,15 @@ impl RTarde {
         )
         .padding(10)
         .width(Length::Fill);
+        let account_info = account_info(&self);
+        let order_buttons = order_buttons(&self);
         let right_side_bar = Column::new()
             .spacing(20)
             .padding(20)
             .push(auto_trading_toggle)
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("Account Info").size(24))
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(Text::new("Total Balance:"))
-                            .push(
-                                Text::new(if let Some(info) = &self.account_info {
-                                    if let Some(asset) =
-                                        info.assets.iter().find(|a| a.asset == "USDT")
-                                    {
-                                        let balance =
-                                            asset.wallet_balance.parse::<f64>().unwrap_or(0.0);
-                                        let pnl =
-                                            asset.unrealized_profit.parse::<f64>().unwrap_or(0.0);
-                                        format!("{:.2} USDT (PNL: {:.2})", balance, pnl)
-                                    } else {
-                                        "0.00 USDT".to_string()
-                                    }
-                                } else {
-                                    "Loading...".to_string()
-                                })
-                                .size(16),
-                            ),
-                    )
-                    .push(Row::new().push(Text::new("account Balance:"))),
-            )
-            .push(
-                Container::new(Text::new("Order").size(24))
-                    .width(Length::Fill)
-                    .center_x(0),
-            )
-            .push(
-                Column::new()
-                    .spacing(10)
-                    .push(Text::new("Order Type").size(16))
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(
-                                button(Text::new("Long Market"))
-                                    .width(Length::Fill)
-                                    .on_press(Message::MarketBuy),
-                            )
-                            .push(
-                                button(Text::new("Short Market"))
-                                    .width(Length::Fill)
-                                    .on_press(Message::MarketSell),
-                            ),
-                    ),
-            )
-            .push(Space::with_height(Length::Fill))
+            .push(account_info)
+            .push(order_buttons)
+            // .push(Space::with_height(Length::Fill))
             .push(Container::new(
                 Column::new()
                     .spacing(10)
@@ -616,10 +547,7 @@ impl RTarde {
                     ),
             ));
 
-        let left_side_bar = Column::new()
-            .spacing(20)
-            .padding(20)
-            .push(current_coin_info);
+        let left_side_bar = Column::new().spacing(20).padding(20).push(coin_info);
 
         Column::new()
             .push(
@@ -647,25 +575,25 @@ impl RTarde {
                     if let Some(account_info) = &self.account_info {
                         let symbol = format!("{}USDT", self.selected_coin);
                         let price = info.price;
-                        let fixed_usdt = 5.5;
+                        let fixed_usdt = 6.0;
 
                         // 현재 포지션 확인
-                        let additional_quantity = if let Some(position) =
+                        let total_quantity = if let Some(position) =
                             account_info.positions.iter().find(|p| p.symbol == symbol)
                         {
                             let current_position =
                                 position.position_amt.parse::<f64>().unwrap_or(0.0);
                             if current_position < 0.0 {
+                                // 숏 포지션이 있다면 전부 청산
                                 current_position.abs()
                             } else {
-                                0.0
+                                // 숏 포지션이 없다면 새로운 롱 포지션
+                                fixed_usdt / price
                             }
                         } else {
-                            0.0
+                            // 포지션이 없다면 새로운 롱 포지션
+                            fixed_usdt / price
                         };
-
-                        // let base_quantity = fixed_usdt / price;
-                        let total_quantity = additional_quantity;
 
                         if total_quantity > 0.0 {
                             let selected_coin = self.selected_coin.clone();
@@ -682,17 +610,26 @@ impl RTarde {
                                 )
                                 .await
                                 {
-                                    println!("order fail: {:?}", e);
+                                    println!("시장가 매수 실패: {:?}", e);
                                 }
                             });
 
-                            self.add_alert(
+                            let message = if account_info.positions.iter().any(|p| {
+                                p.symbol == symbol
+                                    && p.position_amt.parse::<f64>().unwrap_or(0.0) < 0.0
+                            }) {
                                 format!(
-                                    "Market buy (long) attempt:\nQuantity: {:.8} {}\nEstimated cost: {:.4} USDT\nAdditional quantity for position close: {:.8}",
-                                    total_quantity, self.selected_coin, fixed_usdt, additional_quantity
-                                ),
-                                AlertType::Info,
-                            );
+                                    "Closing Short Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
+                                    total_quantity, self.selected_coin, total_quantity * price
+                                )
+                            } else {
+                                format!(
+                                    "New Long Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
+                                    total_quantity, self.selected_coin, total_quantity * price
+                                )
+                            };
+
+                            self.add_alert(message, AlertType::Info);
                         }
                     } else {
                         self.add_alert(
@@ -708,26 +645,25 @@ impl RTarde {
                     if let Some(account_info) = &self.account_info {
                         let symbol = format!("{}USDT", self.selected_coin);
                         let price = info.price;
-                        let fixed_usdt = 5.5;
+                        let fixed_usdt = 6.0;
 
                         // 현재 포지션 확인
-                        let additional_quantity = if let Some(position) =
+                        let total_quantity = if let Some(position) =
                             account_info.positions.iter().find(|p| p.symbol == symbol)
                         {
                             let current_position =
                                 position.position_amt.parse::<f64>().unwrap_or(0.0);
                             if current_position > 0.0 {
-                                current_position.abs()
+                                // 롱 포지션이 있다면 전부 청산
+                                current_position
                             } else {
-                                0.0
+                                // 롱 포지션이 없다면 새로운 숏 포지션
+                                fixed_usdt / price
                             }
                         } else {
-                            0.0
+                            // 포지션이 없다면 새로운 숏 포지션
+                            fixed_usdt / price
                         };
-
-                        let base_quantity = fixed_usdt / price;
-                        // let total_quantity = base_quantity + additional_quantity;
-                        let total_quantity = additional_quantity;
 
                         if total_quantity > 0.0 {
                             let selected_coin = self.selected_coin.clone();
@@ -748,17 +684,26 @@ impl RTarde {
                                 }
                             });
 
-                            self.add_alert(
+                            let message = if account_info.positions.iter().any(|p| {
+                                p.symbol == symbol
+                                    && p.position_amt.parse::<f64>().unwrap_or(0.0) > 0.0
+                            }) {
                                 format!(
-                                    "시장가 매도(숏) 시도:\n수량: {:.8} {}\n예상 비용: {:.4} USDT\n포지션 청산을 위한 추가 수량: {:.8}",
-                                    total_quantity, self.selected_coin, fixed_usdt, additional_quantity
-                                ),
-                                AlertType::Info,
-                            );
+                                    "Closing Long Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
+                                    total_quantity, self.selected_coin, total_quantity * price
+                                )
+                            } else {
+                                format!(
+                                    "New Short Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
+                                    total_quantity, self.selected_coin, total_quantity * price
+                                )
+                            };
+
+                            self.add_alert(message, AlertType::Info);
                         }
                     } else {
                         self.add_alert(
-                            "계정 정보를 불러올 수 없습니다.".to_string(),
+                            "Account information cannot be registered.".to_string(),
                             AlertType::Error,
                         );
                     }
