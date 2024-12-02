@@ -3,6 +3,7 @@ use dotenv::dotenv;
 use models::OptimizedKNNPredictor;
 mod api;
 mod models;
+mod trading;
 mod ui;
 mod utils;
 use api::{
@@ -14,13 +15,17 @@ use api::{
 use iced::{
     futures::channel::mpsc,
     time::{Duration, Instant},
-    widget::{canvas::Canvas, checkbox, container, pick_list, Column, Container, Row, Text},
+    widget::{canvas::Canvas, container, pick_list, Column, Container, Row, Text},
     Color, Element, Length,
     Length::FillPortion,
     Size, Subscription,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use trading::{
+    markey_order::{market_buy, market_sell},
+    TradeType,
+};
 use ui::{
     buttons::ma_controls,
     chart::calculate_knn_signals,
@@ -117,11 +122,6 @@ pub enum Message {
     MarketBuy,         // 시장가 매수 메시지 추가
     MarketSell,        // 시장가 매도 메시지 추가
     UpdateAveragePrice(String, f64),
-}
-#[derive(Debug, Clone, Copy)]
-enum TradeType {
-    Buy,
-    Sell,
 }
 
 #[derive(Debug, Clone)]
@@ -326,145 +326,8 @@ impl RTarde {
             Message::UpdateAveragePrice(symbol, price) => {
                 self.average_prices.insert(symbol, price);
             }
-            Message::MarketBuy => {
-                if let Some(info) = self.coin_list.get(&self.selected_coin) {
-                    if let Some(account_info) = &self.account_info {
-                        let symbol = format!("{}USDT", self.selected_coin);
-                        let price = info.price;
-                        let fixed_usdt = 6.0;
-
-                        // 현재 포지션 확인
-                        let total_quantity = if let Some(position) =
-                            account_info.positions.iter().find(|p| p.symbol == symbol)
-                        {
-                            let current_position =
-                                position.position_amt.parse::<f64>().unwrap_or(0.0);
-                            if current_position < 0.0 {
-                                // 숏 포지션이 있다면 전부 청산
-                                current_position.abs()
-                            } else {
-                                // 숏 포지션이 없다면 새로운 롱 포지션
-                                fixed_usdt / price
-                            }
-                        } else {
-                            // 포지션이 없다면 새로운 롱 포지션
-                            fixed_usdt / price
-                        };
-
-                        if total_quantity > 0.0 {
-                            let selected_coin = self.selected_coin.clone();
-                            let alert_sender = self.alert_sender.clone();
-
-                            let runtime = tokio::runtime::Handle::current();
-                            runtime.spawn(async move {
-                                if let Err(e) = execute_trade(
-                                    selected_coin.clone(),
-                                    TradeType::Buy,
-                                    price,
-                                    total_quantity,
-                                    alert_sender,
-                                )
-                                .await
-                                {
-                                    println!("시장가 매수 실패: {:?}", e);
-                                }
-                            });
-
-                            let message = if account_info.positions.iter().any(|p| {
-                                p.symbol == symbol
-                                    && p.position_amt.parse::<f64>().unwrap_or(0.0) < 0.0
-                            }) {
-                                format!(
-                                    "Closing Short Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
-                                    total_quantity, self.selected_coin, total_quantity * price
-                                )
-                            } else {
-                                format!(
-                                    "New Long Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
-                                    total_quantity, self.selected_coin, total_quantity * price
-                                )
-                            };
-
-                            self.add_alert(message, AlertType::Info);
-                        }
-                    } else {
-                        self.add_alert(
-                            "Account information cannot be registered.".to_string(),
-                            AlertType::Error,
-                        );
-                    }
-                }
-            }
-
-            Message::MarketSell => {
-                if let Some(info) = self.coin_list.get(&self.selected_coin) {
-                    if let Some(account_info) = &self.account_info {
-                        let symbol = format!("{}USDT", self.selected_coin);
-                        let price = info.price;
-                        let fixed_usdt = 6.0;
-
-                        // 현재 포지션 확인
-                        let total_quantity = if let Some(position) =
-                            account_info.positions.iter().find(|p| p.symbol == symbol)
-                        {
-                            let current_position =
-                                position.position_amt.parse::<f64>().unwrap_or(0.0);
-                            if current_position > 0.0 {
-                                // 롱 포지션이 있다면 전부 청산
-                                current_position
-                            } else {
-                                // 롱 포지션이 없다면 새로운 숏 포지션
-                                fixed_usdt / price
-                            }
-                        } else {
-                            // 포지션이 없다면 새로운 숏 포지션
-                            fixed_usdt / price
-                        };
-
-                        if total_quantity > 0.0 {
-                            let selected_coin = self.selected_coin.clone();
-                            let alert_sender = self.alert_sender.clone();
-
-                            let runtime = tokio::runtime::Handle::current();
-                            runtime.spawn(async move {
-                                if let Err(e) = execute_trade(
-                                    selected_coin.clone(),
-                                    TradeType::Sell,
-                                    price,
-                                    total_quantity,
-                                    alert_sender,
-                                )
-                                .await
-                                {
-                                    println!("시장가 매도 실패: {:?}", e);
-                                }
-                            });
-
-                            let message = if account_info.positions.iter().any(|p| {
-                                p.symbol == symbol
-                                    && p.position_amt.parse::<f64>().unwrap_or(0.0) > 0.0
-                            }) {
-                                format!(
-                                    "Closing Long Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
-                                    total_quantity, self.selected_coin, total_quantity * price
-                                )
-                            } else {
-                                format!(
-                                    "New Short Position:\nQuantity: {:.8} {}\nEstimated Cost: {:.4} USDT",
-                                    total_quantity, self.selected_coin, total_quantity * price
-                                )
-                            };
-
-                            self.add_alert(message, AlertType::Info);
-                        }
-                    } else {
-                        self.add_alert(
-                            "Account information cannot be registered.".to_string(),
-                            AlertType::Error,
-                        );
-                    }
-                }
-            }
+            Message::MarketBuy => market_buy(self),
+            Message::MarketSell => market_sell(self),
             Message::ToggleAutoTrading => {
                 self.auto_trading_enabled = !self.auto_trading_enabled;
                 let status = if self.auto_trading_enabled {
@@ -594,7 +457,6 @@ impl RTarde {
             }
             Message::UpdateAccountInfo(info) => {
                 self.account_info = Some(info);
-                println!("{:?}", self.account_info);
             }
 
             Message::FetchError(error) => {

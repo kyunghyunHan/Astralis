@@ -11,7 +11,6 @@ pub fn binance_account_connection() -> impl Stream<Item = Message> {
 
         let api_key = match env::var("BINANCE_API_KEY") {
             Ok(key) => {
-                println!("API KEY found");
                 key
             }
             Err(e) => {
@@ -23,7 +22,6 @@ pub fn binance_account_connection() -> impl Stream<Item = Message> {
 
         let api_secret = match env::var("BINANCE_API_SECRET") {
             Ok(secret) => {
-                println!("API SECRET found");
                 secret
             }
             Err(e) => {
@@ -46,7 +44,6 @@ pub fn binance_account_connection() -> impl Stream<Item = Message> {
                 query, signature
             );
 
-            // println!("Requesting futures account info: {}", url);
 
             match client
                 .get(&url)
@@ -55,17 +52,13 @@ pub fn binance_account_connection() -> impl Stream<Item = Message> {
                 .await
             {
                 Ok(response) => {
-                    // println!("Response status: {}", response.status());
 
                     if response.status().is_success() {
                         let text = response.text().await.unwrap_or_default();
-                        // println!("Raw response: {}", text);
 
                         match serde_json::from_str::<FuturesAccountInfo>(&text) {
                             Ok(account_info) => {
-                                // 계정 정보 업데이트
                                 for position in &account_info.positions {
-                                    println!("this:{:?}",position);
                                     if position.position_amt.parse::<f64>().unwrap_or(0.0) != 0.0 {
                                         let trades_query = format!(
                                             "symbol={}&limit=100&timestamp={}",
@@ -125,7 +118,6 @@ pub fn binance_account_connection() -> impl Stream<Item = Message> {
                 }
             }
 
-            // println!("Sleeping for 5 seconds...");
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     }
