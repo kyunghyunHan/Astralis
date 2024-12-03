@@ -987,7 +987,7 @@ impl<Message> Program<Message> for Chart {
                 if let Some(&strength) = self.momentum_buy_signals.get(ts) {
                     let signal_y = top_margin + ((max_price - candlestick.low) * y_scale) + 25.0;
                     let center_x = x + body_width / 2.0;
-            
+
                     frame.fill_text(canvas::Text {
                         content: "BUY".to_string(),
                         position: Point::new(center_x - 10.0, signal_y),
@@ -996,12 +996,12 @@ impl<Message> Program<Message> for Chart {
                         ..canvas::Text::default()
                     });
                 }
-            
+
                 // 매도 신호
                 if let Some(&strength) = self.momentum_sell_signals.get(ts) {
                     let signal_y = top_margin + ((max_price - candlestick.high) * y_scale) - 25.0;
                     let center_x = x + body_width / 2.0;
-            
+
                     frame.fill_text(canvas::Text {
                         content: "SELL".to_string(),
                         position: Point::new(center_x - 12.0, signal_y),
