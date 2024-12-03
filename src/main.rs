@@ -1,4 +1,3 @@
-#![allow(non_utf8_strings)]
 use dotenv::dotenv;
 use models::OptimizedKNNPredictor;
 mod api;

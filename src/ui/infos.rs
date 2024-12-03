@@ -2,8 +2,8 @@ use crate::Message;
 use crate::RTarde;
 
 use iced::{
-    widget::{checkbox, container, pick_list, Column, Container, Row, Space, Text},
-    Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
+    widget::{Column, Container, Row, Text},
+    Color, Length,
 };
 pub fn coin_info(r: &RTarde) -> Column<'_, Message> {
     let coin_info = if let Some(info) = r.coin_list.get(&r.selected_coin) {

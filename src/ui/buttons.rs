@@ -1,9 +1,6 @@
 use crate::Message;
 use crate::RTarde;
-use iced::widget::{
-    canvas::event::{self, Event},
-    checkbox, container, pick_list, Column, Container, Row, Space, Text,
-};
+use iced::widget::{checkbox, Column, Container, Row};
 pub fn ma_controls(r: &RTarde) -> Container<'static, Message> {
     let ma_controls =
         Container::new(

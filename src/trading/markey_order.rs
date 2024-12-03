@@ -1,7 +1,7 @@
 use crate::execute_trade;
+use crate::trading::TradeType;
 use crate::AlertType;
 use crate::RTarde;
-use crate::trading::TradeType;
 pub fn market_buy(r: &mut RTarde) {
     if let Some(info) = r.coin_list.get(&r.selected_coin) {
         if let Some(account_info) = &r.account_info {

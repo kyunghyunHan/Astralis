@@ -3,9 +3,9 @@ use crate::BinanceTrade;
 use crate::Message;
 use crate::{CandleType, Candlestick};
 use async_stream::stream;
-use futures_util::Stream; // Add this at the top with other imports
+use futures_util::Stream;
 use iced::futures::{channel::mpsc, StreamExt};
-use iced::time::{self, Duration, Instant};
+use iced::time::Duration;
 use reqwest::Url;
 use std::collections::{BTreeMap, HashMap};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};

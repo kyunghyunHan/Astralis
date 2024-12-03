@@ -1,4 +1,3 @@
-use crate::TradeIndicators;
 use crate::{CandleType, Candlestick, Chart, ChartState};
 use iced::{
     mouse,
@@ -6,31 +5,13 @@ use iced::{
         canvas,
         canvas::{
             event::{self, Event},
-            Canvas, Program,
+            Program,
         },
     },
     Color, Pixels, Point, Rectangle, Size,
 };
 
 use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
-
-fn log_trade_signal(
-    signal_type: &str,
-    price: f64,
-    strength: f32,
-    timestamp: u64,
-    indicators: &TradeIndicators,
-) {
-    println!("=== 강한 매도 신호 감지! ===");
-    // println!("시간: {}", dt.format("%Y-%m-%d %H:%M:%S"));
-    // println!("코인: {}", self.selected_coin);
-    println!("가격: {:.2} USDT", price);
-    println!("신호 강도: {:.2}", strength);
-    println!("RSI: {:.2}", indicators.rsi);
-    println!("MA5/MA20: {:.2}/{:.2}", indicators.ma5, indicators.ma20);
-    println!("거래량 비율: {:.2}", indicators.volume_ratio);
-    println!("========================");
-}
 
 pub fn calculate_knn_signals(
     candlesticks: &BTreeMap<u64, Candlestick>,
@@ -112,18 +93,7 @@ pub fn calculate_knn_signals(
             let final_strength = strength.min(1.0);
 
             if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
-                log_trade_signal(
-                    "매수", // 매수 신호
-                    candle.close as f64,
-                    final_strength,
-                    *timestamp,
-                    &TradeIndicators {
-                        rsi,
-                        ma5,
-                        ma20,
-                        volume_ratio,
-                    },
-                );
+                println!("매수");
             }
 
             buy_signals.insert(*timestamp, final_strength);
@@ -147,18 +117,7 @@ pub fn calculate_knn_signals(
             let final_strength = strength.min(1.0);
 
             if final_strength > 0.8 && is_realtime && i == data.len() - 1 {
-                log_trade_signal(
-                    "매도", // 매도 신호
-                    candle.close as f64,
-                    final_strength,
-                    *timestamp,
-                    &TradeIndicators {
-                        rsi,
-                        ma5,
-                        ma20,
-                        volume_ratio,
-                    },
-                );
+                println!("매도");
             }
 
             sell_signals.insert(*timestamp, final_strength);
@@ -325,76 +284,7 @@ pub fn calculate_momentum_signals(
 
     (buy_signals, sell_signals)
 }
-pub fn calculate_bollinger_signals(
-    candlesticks: &BTreeMap<u64, Candlestick>,
-    is_realtime: bool,
-) -> BTreeMap<u64, (f32, f32, f32)> {
-    let mut signals = BTreeMap::new();
-    let window_size = 20;
 
-    // BTreeMap을 Vec으로 변환
-    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
-    if data.len() < window_size {
-        return signals;
-    }
-
-    for i in window_size..data.len() {
-        let (timestamp, candle) = data[i];
-        let window = &data[i - window_size..i];
-
-        // 중간 밴드(SMA) 계산
-        let sma = window.iter().map(|(_, c)| c.close).sum::<f32>() / window_size as f32;
-
-        // 표준편차 계산
-        let variance = window
-            .iter()
-            .map(|(_, c)| {
-                let diff = c.close - sma;
-                diff * diff
-            })
-            .sum::<f32>()
-            / window_size as f32;
-
-        let std_dev = variance.sqrt();
-
-        // 볼린저 밴드 값 계산
-        let upper_band = sma + (2.0 * std_dev);
-        let lower_band = sma - (2.0 * std_dev);
-
-        signals.insert(*timestamp, (upper_band, sma, lower_band));
-
-        // 실시간 모드에서 마지막 캔들에 대한 처리
-        if is_realtime && i == data.len() - 1 {
-            let price = candle.close;
-            if price >= upper_band {
-                println!("=== 볼린저 밴드 상단 돌파! ===");
-                println!("가격: {:.2}", price);
-                println!("상단 밴드: {:.2}", upper_band);
-                println!("중간 밴드: {:.2}", sma);
-                println!("하단 밴드: {:.2}", lower_band);
-                println!("========================");
-            } else if price <= lower_band {
-                println!("=== 볼린저 밴드 하단 돌파! ===");
-                println!("가격: {:.2}", price);
-                println!("상단 밴드: {:.2}", upper_band);
-                println!("중간 밴드: {:.2}", sma);
-                println!("하단 밴드: {:.2}", lower_band);
-                println!("========================");
-            }
-        }
-    }
-
-    signals
-}
-impl CandleType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            CandleType::Minute1 => "1Minute",
-            CandleType::Minute3 => "3Minute", // 표시 텍스트 변경
-            CandleType::Day => "Day",
-        }
-    }
-}
 impl Chart {
     pub fn new(
         candlesticks: BTreeMap<u64, Candlestick>,

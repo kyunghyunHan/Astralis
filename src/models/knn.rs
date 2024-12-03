@@ -9,7 +9,6 @@ impl OptimizedKNNPredictor {
             window_size,
             features_buffer: VecDeque::with_capacity(buffer_size),
             labels_buffer: VecDeque::with_capacity(buffer_size),
-            buffer_size,
         }
     }
 
