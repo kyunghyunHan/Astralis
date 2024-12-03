@@ -1,3 +1,4 @@
+use crate::utils::constant as uc; //utils constant
 use crate::{CandleType, Candlestick, Chart, ChartState};
 use iced::{
     mouse,
@@ -10,7 +11,6 @@ use iced::{
     },
     Color, Pixels, Point, Rectangle, Size,
 };
-
 use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
 
 pub fn calculate_knn_signals(
@@ -199,19 +199,56 @@ pub fn calculate_moving_average(
 
     result
 }
+/*
+Momentum
 
+
+period가 클수록: 장기 추세 중시
+momentum_threshold가 클수록: 강한 변화만 포착
+volume_threshold가 클수록: 거래량이 많은 경우만 포착
+*/
 pub fn calculate_momentum_signals(
     candlesticks: &BTreeMap<u64, Candlestick>,
     is_realtime: bool,
+    candle_type: &CandleType, // 캔들 타입 추가
 ) -> (BTreeMap<u64, f32>, BTreeMap<u64, f32>) {
     let mut buy_signals = BTreeMap::new();
     let mut sell_signals = BTreeMap::new();
+    println!("Candle Type: {:?}", candle_type);
 
-    let period = 10; // 모멘텀 기간
+    let (period, momentum_threshold, volume_threshold) = match candle_type {
+        CandleType::Minute1 => (
+            uc::MOMENTUM_1MINUTE_PERIOD,
+            uc::MOMENTUM_1MINUTE_THRESHOLD,
+            uc::MOMENTUM_1MINUTE_VOLUME_THRESHOLD,
+        ), // 훨씬 낮은 임계값
+        CandleType::Minute3 => (
+            uc::MOMENTUM_3MINUTE_PERIOD,
+            uc::MOMENTUM_3MINUTE_THRESHOLD,
+            uc::MOMENTUM_3MINUTE_VOLUME_THRESHOLD,
+        ), // 훨씬 낮은 임계값
+        CandleType::Day => {
+            println!("Using day settings");
+            (
+                uc::MOMENTUM_DAY_PERIOD,
+                uc::MOMENTUM_DAY_THRESHOLD,
+                uc::MOMENTUM_DAY_VOLUME_THRESHOLD,
+            )
+        }
+    };
+
+    println!(
+        "Settings - Period: {}, Momentum Threshold: {}, Volume Threshold: {}",
+        period, momentum_threshold, volume_threshold
+    );
+
+    // 데이터 상태 확인
     let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
+    println!("Total data points: {}", data.len());
 
     if data.len() < period {
-        return (buy_signals, sell_signals);
+        println!("Not enough data points");
+        return (BTreeMap::new(), BTreeMap::new());
     }
 
     for i in period..data.len() {
@@ -230,7 +267,7 @@ pub fn calculate_momentum_signals(
             * period as f32;
 
         // 매수 신호
-        if momentum > 2.0 && volume_ratio > 1.2 {
+        if momentum > momentum_threshold && volume_ratio > volume_threshold {
             let mut strength = 0.5;
 
             // 모멘텀이 강할수록 신호 강도 증가
@@ -256,7 +293,7 @@ pub fn calculate_momentum_signals(
         }
 
         // 매도 신호
-        if momentum < -2.0 && volume_ratio > 1.2 {
+        if momentum < -momentum_threshold && volume_ratio > volume_threshold {
             let mut strength = 0.5;
 
             // 하락 모멘텀이 강할수록 신호 강도 증가
@@ -643,7 +680,7 @@ impl<Message> Program<Message> for Chart {
                         }
                     }),
                     canvas::Stroke::default()
-                        .with_color(Color::from_rgb(1.0, 0.0, 0.0)) // 빨간색
+                        .with_color(uc::DAKR_RED) // 빨간색
                         .with_width(1.0),
                 );
             }

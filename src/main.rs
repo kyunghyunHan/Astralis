@@ -5,6 +5,7 @@ mod models;
 mod trading;
 mod ui;
 mod utils;
+
 use api::{
     account::binance_account_connection,
     binance::{binance_connection, fetch_candles, fetch_candles_async, get_top_volume_pairs},
@@ -102,8 +103,7 @@ pub enum Message {
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
     ToggleKNN,
-    ToggleMomentum,                      // KNN 시스템 켜기/끄기
-    UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
+    ToggleMomentum, // KNN 시스템 켜기/끄기
     TryBuy {
         price: f64,
         strength: f32,
@@ -294,7 +294,7 @@ impl RTarde {
             self.knn_sell_signals.clone(),
             self.momentum_enabled,
             self.momentum_buy_signals.clone(),
-            self.momentum_buy_signals.clone(),
+            self.momentum_sell_signals.clone(),
         ))
         .width(iced::Fill)
         .height(Length::from(800));
@@ -515,17 +515,17 @@ impl RTarde {
             Message::ToggleMomentum => {
                 self.momentum_enabled = !self.momentum_enabled;
                 if self.momentum_enabled {
-                    let (buy_signals, sell_signals) =
-                        calculate_momentum_signals(&self.candlesticks, false);
+                    let (buy_signals, sell_signals) = calculate_momentum_signals(
+                        &self.candlesticks,
+                        false,
+                        &self.selected_candle_type,
+                    );
                     self.momentum_buy_signals = buy_signals;
                     self.momentum_sell_signals = sell_signals;
                 } else {
                     self.momentum_buy_signals.clear();
                     self.momentum_sell_signals.clear();
                 }
-            }
-            Message::UpdateKNNPrediction(prediction) => {
-                self.knn_prediction = prediction;
             }
 
             Message::LoadMoreCandles => {
@@ -565,6 +565,15 @@ impl RTarde {
                         self.knn_buy_signals = buy_signals;
                         self.knn_sell_signals = sell_signals;
                     }
+                    if self.momentum_enabled {
+                        let (buy_signals, sell_signals) = calculate_momentum_signals(
+                            &self.candlesticks,
+                            false,
+                            &self.selected_candle_type,
+                        ); // false 추가
+                        self.momentum_buy_signals = buy_signals;
+                        self.momentum_sell_signals = sell_signals;
+                    }
                 }
             }
             Message::ToggleMA5 => self.show_ma5 = !self.show_ma5,
@@ -572,7 +581,7 @@ impl RTarde {
             Message::ToggleMA20 => self.show_ma20 = !self.show_ma20,
             Message::ToggleMA200 => self.show_ma200 = !self.show_ma200,
             Message::SelectCandleType(candle_type) => {
-                self.add_alert(format!("1"), AlertType::Buy);
+                // self.add_alert(format!("1"), AlertType::Buy);
                 println!("Changing candle type to: {}", candle_type);
                 self.selected_candle_type = candle_type.clone();
 
@@ -603,6 +612,20 @@ impl RTarde {
                             if let Some(prediction) = self.predict_knn() {
                                 self.knn_prediction = Some(prediction);
                             }
+                        }
+                        if self.momentum_enabled {
+                            let (buy_signals, sell_signals) = calculate_momentum_signals(
+                                &self.candlesticks,
+                                false,
+                                &self.selected_candle_type,
+                            );
+                            self.momentum_buy_signals = buy_signals;
+                            self.momentum_sell_signals = sell_signals;
+
+                            // // 예측도 업데이트
+                            // if let Some(prediction) = self.predict_knn() {
+                            //     self.knn_prediction = Some(prediction);
+                            // }
                         }
                         // 가장 오래된 캔들의 날짜 저장
                         if let Some((&timestamp, _)) = self.candlesticks.iter().next() {
@@ -664,6 +687,16 @@ impl RTarde {
                                     self.knn_prediction = Some(prediction);
                                 }
                             }
+
+                            if self.momentum_enabled {
+                                let (buy_signals, sell_signals) = calculate_momentum_signals(
+                                    &self.candlesticks,
+                                    false,
+                                    &self.selected_candle_type,
+                                );
+                                self.momentum_buy_signals = buy_signals;
+                                self.momentum_sell_signals = sell_signals;
+                            }
                             // 가장 오래된 캔들의 날짜 저장
                             if let Some((&timestamp, _)) = self.candlesticks.iter().next() {
                                 let datetime = chrono::NaiveDateTime::from_timestamp_opt(
@@ -700,12 +733,22 @@ impl RTarde {
                 if trade_data.symbol != current_market {
                     return;
                 }
-
+                //knn
                 if self.knn_enabled {
                     let (buy_signals, sell_signals) =
                         calculate_knn_signals(&self.candlesticks, true); // true로 실시간 표시
                     self.knn_buy_signals = buy_signals;
                     self.knn_sell_signals = sell_signals;
+                }
+
+                if self.momentum_enabled {
+                    let (buy_signals, sell_signals) = calculate_momentum_signals(
+                        &self.candlesticks,
+                        true,
+                        &self.selected_candle_type, // 이 부분이 이전에 빠져있었음
+                    );
+                    self.momentum_buy_signals = buy_signals;
+                    self.momentum_sell_signals = sell_signals;
                 }
                 if self.candlesticks.is_empty() {
                     // 초기 데이터 로드

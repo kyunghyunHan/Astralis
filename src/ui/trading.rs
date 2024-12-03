@@ -1,3 +1,4 @@
+use crate::utils::constant as uc;
 use crate::Message;
 use crate::RTarde;
 use iced::widget::button::Status;
@@ -50,9 +51,7 @@ pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
                             if status != Status::Hovered {
                                 // 기본 상태: 어두운 빨간색
                                 Style {
-                                    background: Some(Background::Color(Color::from_rgb(
-                                        0.7, 0.1, 0.1, // 어두운 빨간색
-                                    ))),
+                                    background: Some(Background::Color(uc::DAKR_RED)),
                                     text_color: Color::WHITE,
                                     border: Border::default().rounded(BUTTON_ROUND),
                                     shadow: Shadow::default(),
@@ -60,9 +59,7 @@ pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
                             } else {
                                 // 호버 상태: 밝은 빨간색
                                 Style {
-                                    background: Some(Background::Color(Color::from_rgb(
-                                        0.9, 0.3, 0.3, // 밝은 빨간색
-                                    ))),
+                                    background: Some(Background::Color(uc::BRIGHT_RED)),
                                     text_color: Color::WHITE,
                                     border: Border::default().rounded(BUTTON_ROUND),
                                     shadow: Shadow::default(),
