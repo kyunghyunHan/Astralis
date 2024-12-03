@@ -1,28 +1,18 @@
-use crate::models::OptimizedBollingerBands;
 use crate::TradeIndicators;
 use crate::{CandleType, Candlestick, Chart, ChartState};
-use async_stream::stream;
-use dotenv::dotenv;
-use iced::futures::{channel::mpsc, StreamExt};
-use iced::time::{self, Duration, Instant};
 use iced::{
     mouse,
     widget::{
-        button, canvas,
+        canvas,
         canvas::{
             event::{self, Event},
             Canvas, Program,
         },
-        checkbox, column, container, pick_list, text, text_input, Checkbox, Column, Container,
-        Space, Text,
     },
-    Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
+    Color, Pixels, Point, Rectangle, Size,
 };
-use reqwest::Url;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
 
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
+use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
 
 fn log_trade_signal(
     signal_type: &str,

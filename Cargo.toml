@@ -18,3 +18,10 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 dotenv = "0.15.0"
+
+[profile.release]
+opt-level = 3           # 최대 최적화
+lto = true             # 링크 타임 최적화
+codegen-units = 1      # 더 나은 최적화를 위해 단일 유닛으로 생성
+panic = 'abort'        # 패닉 시 언와인딩 대신 즉시 중단
+strip = true           # 디버그 심볼 제거
