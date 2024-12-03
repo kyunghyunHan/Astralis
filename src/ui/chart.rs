@@ -1,9 +1,8 @@
+use crate::models::BollingerBands;
+use crate::TradeIndicators;
 use crate::{CandleType, Candlestick, Chart, ChartState};
 use async_stream::stream;
 use dotenv::dotenv;
-use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
-
-use crate::TradeIndicators;
 use iced::futures::{channel::mpsc, StreamExt};
 use iced::time::{self, Duration, Instant};
 use iced::{
@@ -19,10 +18,7 @@ use iced::{
     },
     Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
 };
-use reqwest::Url;
-use serde::{Deserialize, Serialize};
-
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
+use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
 
 fn log_trade_signal(
     signal_type: &str,
@@ -177,7 +173,10 @@ pub fn calculate_knn_signals(
 
     (buy_signals, sell_signals)
 }
-pub fn calculate_rsi(candlesticks: &BTreeMap<u64, Candlestick>, period: usize) -> BTreeMap<u64, f32> {
+pub fn calculate_rsi(
+    candlesticks: &BTreeMap<u64, Candlestick>,
+    period: usize,
+) -> BTreeMap<u64, f32> {
     let mut rsi_values = BTreeMap::new();
     if candlesticks.len() < period + 1 {
         return rsi_values;
@@ -268,12 +267,16 @@ impl Chart {
         knn_prediction: Option<String>,
         buy_signals: BTreeMap<u64, f32>,  // 타입 변경
         sell_signals: BTreeMap<u64, f32>, // 타입 변경
+        bollinger_enabled: bool,
+
     ) -> Self {
         let ma5_values = calculate_moving_average(&candlesticks, 5);
         let ma10_values = calculate_moving_average(&candlesticks, 10);
         let ma20_values = calculate_moving_average(&candlesticks, 20);
         let ma200_values = calculate_moving_average(&candlesticks, 200);
         let rsi_values = calculate_rsi(&candlesticks, 14);
+        let mut bollinger = BollingerBands::new(20, 2.0);
+        bollinger.calculate(&candlesticks);
 
         let price_range = if candlesticks.is_empty() {
             Some((0.0, 100.0))
@@ -332,6 +335,8 @@ impl Chart {
             knn_prediction,
             buy_signals,
             sell_signals,
+            bollinger_enabled,
+            bollinger_bands: bollinger,
         }
     }
 }
@@ -824,6 +829,73 @@ impl<Message> Program<Message> for Chart {
                             p.line_to(Point::new(house_x + base_size, signal_y));
                         }),
                         color,
+                    );
+                }
+            }
+            // Program 트레이트의 draw 메서드 내부에 추가할 코드 (기존 draw 함수 안에 넣으세요)
+            // MA 선을 그리는 부분 아래에 추가
+            if self.bollinger_enabled {
+                // 상단 밴드
+                let bb_points: Vec<Point> = visible_candlesticks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (ts, _))| {
+                        self.bollinger_bands.values.get(ts).map(|&(upper, _, _)| {
+                            Point::new(
+                                left_margin
+                                    + (i as f32 * base_candle_width)
+                                    + initial_offset
+                                    + state.offset,
+                                top_margin + ((max_price - upper) * y_scale),
+                            )
+                        })
+                    })
+                    .collect();
+
+                // 상단 밴드 그리기
+                if bb_points.len() >= 2 {
+                    frame.stroke(
+                        &canvas::Path::new(|p| {
+                            p.move_to(bb_points[0]);
+                            for point in bb_points.iter().skip(1) {
+                                p.line_to(*point);
+                            }
+                        }),
+                        canvas::Stroke::default()
+                            .with_color(Color::from_rgba(0.5, 0.5, 1.0, 0.5))
+                            .with_width(1.0),
+                    );
+                }
+
+                // 하단 밴드
+                let bb_points: Vec<Point> = visible_candlesticks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (ts, _))| {
+                        self.bollinger_bands.values.get(ts).map(|&(_, _, lower)| {
+                            Point::new(
+                                left_margin
+                                    + (i as f32 * base_candle_width)
+                                    + initial_offset
+                                    + state.offset,
+                                top_margin + ((max_price - lower) * y_scale),
+                            )
+                        })
+                    })
+                    .collect();
+
+                // 하단 밴드 그리기
+                if bb_points.len() >= 2 {
+                    frame.stroke(
+                        &canvas::Path::new(|p| {
+                            p.move_to(bb_points[0]);
+                            for point in bb_points.iter().skip(1) {
+                                p.line_to(*point);
+                            }
+                        }),
+                        canvas::Stroke::default()
+                            .with_color(Color::from_rgba(0.5, 0.5, 1.0, 0.5))
+                            .with_width(1.0),
                     );
                 }
             }

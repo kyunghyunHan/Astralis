@@ -48,7 +48,9 @@ pub struct RTarde {
     loading_more: bool,          // 추가: 데이터 로딩 중인지 여부
     oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
     knn_enabled: bool,
-    knn_prediction: Option<String>,       // "UP" 또는 "DOWN"
+    knn_prediction: Option<String>, // "UP" 또는 "DOWN"
+    bollinger_enabled: bool,
+
     knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
     account_info: Option<FuturesAccountInfo>,
@@ -100,6 +102,7 @@ pub enum Message {
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
     ToggleKNN,                                     // KNN 시스템 켜기/끄기
+    ToggleBollinger,                               // KNN 시스템 켜기/끄기
     UpdateKNNPrediction(Option<String>),           // 예측 결과 업데이트
     TryBuy {
         price: f64,
@@ -203,6 +206,7 @@ impl Default for RTarde {
             oldest_date: None,
             knn_enabled: false,
             knn_prediction: None,
+            bollinger_enabled: false,
             knn_buy_signals: BTreeMap::new(),
             knn_sell_signals: BTreeMap::new(),
             account_info: None,
@@ -286,6 +290,7 @@ impl RTarde {
             self.knn_prediction.clone(),
             self.knn_buy_signals.clone(),
             self.knn_sell_signals.clone(),
+            self.bollinger_enabled.clone(),
         ))
         .width(iced::Fill)
         .height(Length::from(800));
@@ -486,7 +491,22 @@ impl RTarde {
                     }
                 }
             }
-
+            Message::ToggleBollinger => {
+                self.bollinger_enabled = !self.bollinger_enabled;
+                if self.bollinger_enabled {
+                    // if let Some(prediction) = self.predict_knn() {
+                    //     self.knn_prediction = Some(prediction);
+                    //     let (buy_signals, sell_signals) =
+                    //         calculate_knn_signals(&self.candlesticks, false);
+                    //     self.knn_buy_signals = buy_signals;
+                    //     self.knn_sell_signals = sell_signals;
+                    // }
+                } else {
+                    // self.knn_prediction = None;
+                    // self.knn_buy_signals.clear();
+                    // self.knn_sell_signals.clear();
+                }
+            }
             Message::ToggleKNN => {
                 self.knn_enabled = !self.knn_enabled;
                 if self.knn_enabled {

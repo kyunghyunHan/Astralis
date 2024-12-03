@@ -30,7 +30,13 @@ pub fn ma_controls(r: &RTarde) -> Container<'static, Message> {
                 )
                 .push(Row::new().spacing(10).push(
                     checkbox("KNN prediction", r.knn_enabled).on_toggle(|_| Message::ToggleKNN),
-                )),
+                ))
+                .push(
+                    Row::new().spacing(10).push(
+                        checkbox("Bollienger prediction", r.bollinger_enabled)
+                            .on_toggle(|_| Message::ToggleBollinger),
+                    ),
+                ),
         )
         .padding(10);
     ma_controls
