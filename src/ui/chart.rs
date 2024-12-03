@@ -1,4 +1,4 @@
-use crate::models::BollingerBands;
+use crate::models::OptimizedBollingerBands;
 use crate::TradeIndicators;
 use crate::{CandleType, Candlestick, Chart, ChartState};
 use async_stream::stream;
@@ -18,7 +18,11 @@ use iced::{
     },
     Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
 };
+use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
+
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
 
 fn log_trade_signal(
     signal_type: &str,
@@ -220,6 +224,7 @@ pub fn calculate_rsi(
 
     rsi_values
 }
+
 pub fn calculate_moving_average(
     candlesticks: &BTreeMap<u64, Candlestick>,
     period: usize,
@@ -246,6 +251,151 @@ pub fn calculate_moving_average(
     result
 }
 
+pub fn calculate_momentum_signals(
+    candlesticks: &BTreeMap<u64, Candlestick>,
+    is_realtime: bool,
+) -> (BTreeMap<u64, f32>, BTreeMap<u64, f32>) {
+    let mut buy_signals = BTreeMap::new();
+    let mut sell_signals = BTreeMap::new();
+
+    let period = 10; // 모멘텀 기간
+    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
+
+    if data.len() < period {
+        return (buy_signals, sell_signals);
+    }
+
+    for i in period..data.len() {
+        let (timestamp, current_candle) = data[i];
+        let (_, past_candle) = data[i - period];
+
+        // 모멘텀 값 계산 (현재가격 - N일 전 가격) / N일 전 가격 * 100
+        let momentum = (current_candle.close - past_candle.close) / past_candle.close * 100.0;
+
+        // 추가 필터: 거래량 확인
+        let volume_ratio = current_candle.volume
+            / data[i - period..i]
+                .iter()
+                .map(|(_, c)| c.volume)
+                .sum::<f32>()
+            * period as f32;
+
+        // 매수 신호
+        if momentum > 2.0 && volume_ratio > 1.2 {
+            let mut strength = 0.5;
+
+            // 모멘텀이 강할수록 신호 강도 증가
+            strength += (momentum / 10.0).min(0.3);
+
+            // 거래량이 많을수록 신호 강도 증가
+            if volume_ratio > 1.2 {
+                strength += ((volume_ratio - 1.2) / 2.0).min(0.2);
+            }
+
+            let final_strength = strength.min(1.0);
+
+            if final_strength > 0.7 && is_realtime && i == data.len() - 1 {
+                println!("=== 강한 상승 모멘텀 감지! ===");
+                println!("가격: {:.2}", current_candle.close);
+                println!("모멘텀: {:.2}%", momentum);
+                println!("거래량 비율: {:.2}", volume_ratio);
+                println!("신호 강도: {:.2}", final_strength);
+                println!("========================");
+            }
+
+            buy_signals.insert(*timestamp, final_strength);
+        }
+
+        // 매도 신호
+        if momentum < -2.0 && volume_ratio > 1.2 {
+            let mut strength = 0.5;
+
+            // 하락 모멘텀이 강할수록 신호 강도 증가
+            strength += (-momentum / 10.0).min(0.3);
+
+            // 거래량이 많을수록 신호 강도 증가
+            if volume_ratio > 1.2 {
+                strength += ((volume_ratio - 1.2) / 2.0).min(0.2);
+            }
+
+            let final_strength = strength.min(1.0);
+
+            if final_strength > 0.7 && is_realtime && i == data.len() - 1 {
+                println!("=== 강한 하락 모멘텀 감지! ===");
+                println!("가격: {:.2}", current_candle.close);
+                println!("모멘텀: {:.2}%", momentum);
+                println!("거래량 비율: {:.2}", volume_ratio);
+                println!("신호 강도: {:.2}", final_strength);
+                println!("========================");
+            }
+
+            sell_signals.insert(*timestamp, final_strength);
+        }
+    }
+
+    (buy_signals, sell_signals)
+}
+pub fn calculate_bollinger_signals(
+    candlesticks: &BTreeMap<u64, Candlestick>,
+    is_realtime: bool,
+) -> BTreeMap<u64, (f32, f32, f32)> {
+    let mut signals = BTreeMap::new();
+    let window_size = 20;
+
+    // BTreeMap을 Vec으로 변환
+    let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
+    if data.len() < window_size {
+        return signals;
+    }
+
+    for i in window_size..data.len() {
+        let (timestamp, candle) = data[i];
+        let window = &data[i - window_size..i];
+
+        // 중간 밴드(SMA) 계산
+        let sma = window.iter().map(|(_, c)| c.close).sum::<f32>() / window_size as f32;
+
+        // 표준편차 계산
+        let variance = window
+            .iter()
+            .map(|(_, c)| {
+                let diff = c.close - sma;
+                diff * diff
+            })
+            .sum::<f32>()
+            / window_size as f32;
+
+        let std_dev = variance.sqrt();
+
+        // 볼린저 밴드 값 계산
+        let upper_band = sma + (2.0 * std_dev);
+        let lower_band = sma - (2.0 * std_dev);
+
+        signals.insert(*timestamp, (upper_band, sma, lower_band));
+
+        // 실시간 모드에서 마지막 캔들에 대한 처리
+        if is_realtime && i == data.len() - 1 {
+            let price = candle.close;
+            if price >= upper_band {
+                println!("=== 볼린저 밴드 상단 돌파! ===");
+                println!("가격: {:.2}", price);
+                println!("상단 밴드: {:.2}", upper_band);
+                println!("중간 밴드: {:.2}", sma);
+                println!("하단 밴드: {:.2}", lower_band);
+                println!("========================");
+            } else if price <= lower_band {
+                println!("=== 볼린저 밴드 하단 돌파! ===");
+                println!("가격: {:.2}", price);
+                println!("상단 밴드: {:.2}", upper_band);
+                println!("중간 밴드: {:.2}", sma);
+                println!("하단 밴드: {:.2}", lower_band);
+                println!("========================");
+            }
+        }
+    }
+
+    signals
+}
 impl CandleType {
     fn as_str(&self) -> &'static str {
         match self {
@@ -267,16 +417,15 @@ impl Chart {
         knn_prediction: Option<String>,
         buy_signals: BTreeMap<u64, f32>,  // 타입 변경
         sell_signals: BTreeMap<u64, f32>, // 타입 변경
-        bollinger_enabled: bool,
-
+        momentum_enabled: bool,
+        momentum_buy_signals: BTreeMap<u64, f32>, // 타입 변경
+        momentum_sell_signals: BTreeMap<u64, f32>, // 타입 변경
     ) -> Self {
         let ma5_values = calculate_moving_average(&candlesticks, 5);
         let ma10_values = calculate_moving_average(&candlesticks, 10);
         let ma20_values = calculate_moving_average(&candlesticks, 20);
         let ma200_values = calculate_moving_average(&candlesticks, 200);
         let rsi_values = calculate_rsi(&candlesticks, 14);
-        let mut bollinger = BollingerBands::new(20, 2.0);
-        bollinger.calculate(&candlesticks);
 
         let price_range = if candlesticks.is_empty() {
             Some((0.0, 100.0))
@@ -335,8 +484,9 @@ impl Chart {
             knn_prediction,
             buy_signals,
             sell_signals,
-            bollinger_enabled,
-            bollinger_bands: bollinger,
+            momentum_enabled,
+            momentum_buy_signals,
+            momentum_sell_signals,
         }
     }
 }
@@ -832,71 +982,33 @@ impl<Message> Program<Message> for Chart {
                     );
                 }
             }
-            // Program 트레이트의 draw 메서드 내부에 추가할 코드 (기존 draw 함수 안에 넣으세요)
-            // MA 선을 그리는 부분 아래에 추가
-            if self.bollinger_enabled {
-                // 상단 밴드
-                let bb_points: Vec<Point> = visible_candlesticks
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, (ts, _))| {
-                        self.bollinger_bands.values.get(ts).map(|&(upper, _, _)| {
-                            Point::new(
-                                left_margin
-                                    + (i as f32 * base_candle_width)
-                                    + initial_offset
-                                    + state.offset,
-                                top_margin + ((max_price - upper) * y_scale),
-                            )
-                        })
-                    })
-                    .collect();
-
-                // 상단 밴드 그리기
-                if bb_points.len() >= 2 {
-                    frame.stroke(
-                        &canvas::Path::new(|p| {
-                            p.move_to(bb_points[0]);
-                            for point in bb_points.iter().skip(1) {
-                                p.line_to(*point);
-                            }
-                        }),
-                        canvas::Stroke::default()
-                            .with_color(Color::from_rgba(0.5, 0.5, 1.0, 0.5))
-                            .with_width(1.0),
-                    );
+            if self.momentum_enabled {
+                // 매수 신호
+                if let Some(&strength) = self.momentum_buy_signals.get(ts) {
+                    let signal_y = top_margin + ((max_price - candlestick.low) * y_scale) + 25.0;
+                    let center_x = x + body_width / 2.0;
+            
+                    frame.fill_text(canvas::Text {
+                        content: "BUY".to_string(),
+                        position: Point::new(center_x - 10.0, signal_y),
+                        color: Color::from_rgba(0.0, 1.0, 0.5, 0.3 + strength * 0.7),
+                        size: Pixels(12.0),
+                        ..canvas::Text::default()
+                    });
                 }
-
-                // 하단 밴드
-                let bb_points: Vec<Point> = visible_candlesticks
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, (ts, _))| {
-                        self.bollinger_bands.values.get(ts).map(|&(_, _, lower)| {
-                            Point::new(
-                                left_margin
-                                    + (i as f32 * base_candle_width)
-                                    + initial_offset
-                                    + state.offset,
-                                top_margin + ((max_price - lower) * y_scale),
-                            )
-                        })
-                    })
-                    .collect();
-
-                // 하단 밴드 그리기
-                if bb_points.len() >= 2 {
-                    frame.stroke(
-                        &canvas::Path::new(|p| {
-                            p.move_to(bb_points[0]);
-                            for point in bb_points.iter().skip(1) {
-                                p.line_to(*point);
-                            }
-                        }),
-                        canvas::Stroke::default()
-                            .with_color(Color::from_rgba(0.5, 0.5, 1.0, 0.5))
-                            .with_width(1.0),
-                    );
+            
+                // 매도 신호
+                if let Some(&strength) = self.momentum_sell_signals.get(ts) {
+                    let signal_y = top_margin + ((max_price - candlestick.high) * y_scale) - 25.0;
+                    let center_x = x + body_width / 2.0;
+            
+                    frame.fill_text(canvas::Text {
+                        content: "SELL".to_string(),
+                        position: Point::new(center_x - 12.0, signal_y),
+                        color: Color::from_rgba(1.0, 0.0, 0.0, 0.3 + strength * 0.7),
+                        size: Pixels(12.0),
+                        ..canvas::Text::default()
+                    });
                 }
             }
         }

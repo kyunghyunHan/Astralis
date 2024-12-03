@@ -1,4 +1,3 @@
-use crate::models::BollingerBands;
 use std::collections::{BTreeMap, VecDeque};
 pub mod chart;
 use iced::Point;
@@ -26,8 +25,9 @@ pub struct Chart {
     pub knn_prediction: Option<String>,
     pub buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     pub sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
-    pub bollinger_enabled: bool,
-    pub bollinger_bands: BollingerBands,
+    pub momentum_enabled: bool,
+    pub momentum_buy_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
+    pub momentum_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
 }
 
 #[derive(Default, Debug)]

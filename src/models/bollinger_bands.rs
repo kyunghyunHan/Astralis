@@ -1,49 +1,42 @@
-use crate::models::BollingerBands;
+use crate::models::OptimizedBollingerBands;
 use crate::Candlestick;
-use std::collections::BTreeMap;
 
-impl BollingerBands {
-    pub fn new(period: usize, num_std: f32) -> Self {
+
+impl OptimizedBollingerBands {
+    pub fn new(period: usize, num_std: f32, window_size: usize) -> Self {
         Self {
             period,
             num_std,
-            values: BTreeMap::new(),
+            window_size,
         }
     }
 
-    pub fn calculate(&mut self, candlesticks: &BTreeMap<u64, Candlestick>) {
-        self.values.clear();
-
-        if candlesticks.len() < self.period {
-            return;
+    pub fn calculate_bands(&self, candlesticks: &[(&u64, &Candlestick)]) -> Option<(f32, f32, f32)> {
+        if candlesticks.len() < self.window_size {
+            return None;
         }
 
-        let data: Vec<(&u64, &Candlestick)> = candlesticks.iter().collect();
-
-        for i in (self.period - 1)..data.len() {
-            let window = &data[(i + 1 - self.period)..=i];
-
-            // 중간 밴드 (SMA) 계산
-            let sum: f32 = window.iter().map(|(_, c)| c.close).sum();
-            let sma = sum / self.period as f32;
-
-            // 표준편차 계산
-            let variance = window
-                .iter()
-                .map(|(_, c)| {
-                    let diff = c.close - sma;
-                    diff * diff
-                })
-                .sum::<f32>()
-                / self.period as f32;
-
-            let std_dev = variance.sqrt();
-
-            // 밴드 계산
-            let upper = sma + (self.num_std * std_dev);
-            let lower = sma - (self.num_std * std_dev);
-
-            self.values.insert(*data[i].0, (upper, sma, lower));
-        }
+        let window = &candlesticks[candlesticks.len() - self.window_size..];
+        
+        // 중간 밴드(SMA) 계산
+        let sma = window.iter()
+            .map(|(_, c)| c.close)
+            .sum::<f32>() / self.window_size as f32;
+        
+        // 표준편차 계산
+        let variance = window.iter()
+            .map(|(_, c)| {
+                let diff = c.close - sma;
+                diff * diff
+            })
+            .sum::<f32>() / self.window_size as f32;
+        
+        let std_dev = variance.sqrt();
+        
+        Some((
+            sma + (self.num_std * std_dev), // 상단 밴드
+            sma,                            // 중간 밴드
+            sma - (self.num_std * std_dev), // 하단 밴드
+        ))
     }
 }

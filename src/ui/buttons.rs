@@ -1,15 +1,8 @@
 use crate::Message;
 use crate::RTarde;
-use iced::{
-    widget::{
-        button,
-        canvas::{
-            event::{self, Event},
-            Canvas, Program,
-        },
-        checkbox, container, pick_list, Column, Container, Row, Space, Text,
-    },
-    Color, Element, Length, Pixels, Point, Rectangle, Size, Subscription, Theme,
+use iced::widget::{
+    canvas::event::{self, Event},
+    checkbox, container, pick_list, Column, Container, Row, Space, Text,
 };
 pub fn ma_controls(r: &RTarde) -> Container<'static, Message> {
     let ma_controls =
@@ -33,8 +26,8 @@ pub fn ma_controls(r: &RTarde) -> Container<'static, Message> {
                 ))
                 .push(
                     Row::new().spacing(10).push(
-                        checkbox("Bollienger prediction", r.bollinger_enabled)
-                            .on_toggle(|_| Message::ToggleBollinger),
+                        checkbox("Bollinger prediction", r.momentum_enabled)
+                            .on_toggle(|_| Message::ToggleMomentum),
                     ),
                 ),
         )

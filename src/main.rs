@@ -28,7 +28,7 @@ use trading::{
 };
 use ui::{
     buttons::ma_controls,
-    chart::calculate_knn_signals,
+    chart::{calculate_knn_signals, calculate_momentum_signals},
     infos::{account_info, coin_info, current_position},
     trading::{auto_trading_toggle, order_buttons},
     CandleType, Candlestick, Chart, ChartState,
@@ -48,9 +48,7 @@ pub struct RTarde {
     loading_more: bool,          // 추가: 데이터 로딩 중인지 여부
     oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
     knn_enabled: bool,
-    knn_prediction: Option<String>, // "UP" 또는 "DOWN"
-    bollinger_enabled: bool,
-
+    knn_prediction: Option<String>,       // "UP" 또는 "DOWN"
     knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
     knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
     account_info: Option<FuturesAccountInfo>,
@@ -59,6 +57,9 @@ pub struct RTarde {
     last_trade_time: Option<Instant>, // 마지막 거래 시간 (과도한 거래 방지용)
     alert_sender: mpsc::Sender<(String, AlertType)>,
     average_prices: HashMap<String, f64>,
+    momentum_enabled: bool,
+    momentum_buy_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
+    momentum_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
 }
 #[derive(Debug, Clone)]
 struct Alert {
@@ -101,9 +102,9 @@ pub enum Message {
     ToggleMA200,                                   //200일 이동평균선
     LoadMoreCandles,                               // 추가
     MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
-    ToggleKNN,                                     // KNN 시스템 켜기/끄기
-    ToggleBollinger,                               // KNN 시스템 켜기/끄기
-    UpdateKNNPrediction(Option<String>),           // 예측 결과 업데이트
+    ToggleKNN,
+    ToggleMomentum,                      // KNN 시스템 켜기/끄기
+    UpdateKNNPrediction(Option<String>), // 예측 결과 업데이트
     TryBuy {
         price: f64,
         strength: f32,
@@ -206,7 +207,6 @@ impl Default for RTarde {
             oldest_date: None,
             knn_enabled: false,
             knn_prediction: None,
-            bollinger_enabled: false,
             knn_buy_signals: BTreeMap::new(),
             knn_sell_signals: BTreeMap::new(),
             account_info: None,
@@ -215,6 +215,9 @@ impl Default for RTarde {
             last_trade_time: None,
             alert_sender,
             average_prices: HashMap::new(),
+            momentum_enabled: false,
+            momentum_buy_signals: BTreeMap::new(),
+            momentum_sell_signals: BTreeMap::new(),
         }
     }
 }
@@ -290,7 +293,9 @@ impl RTarde {
             self.knn_prediction.clone(),
             self.knn_buy_signals.clone(),
             self.knn_sell_signals.clone(),
-            self.bollinger_enabled.clone(),
+            self.momentum_enabled,
+            self.momentum_buy_signals.clone(),
+            self.momentum_buy_signals.clone(),
         ))
         .width(iced::Fill)
         .height(Length::from(800));
@@ -491,22 +496,7 @@ impl RTarde {
                     }
                 }
             }
-            Message::ToggleBollinger => {
-                self.bollinger_enabled = !self.bollinger_enabled;
-                if self.bollinger_enabled {
-                    // if let Some(prediction) = self.predict_knn() {
-                    //     self.knn_prediction = Some(prediction);
-                    //     let (buy_signals, sell_signals) =
-                    //         calculate_knn_signals(&self.candlesticks, false);
-                    //     self.knn_buy_signals = buy_signals;
-                    //     self.knn_sell_signals = sell_signals;
-                    // }
-                } else {
-                    // self.knn_prediction = None;
-                    // self.knn_buy_signals.clear();
-                    // self.knn_sell_signals.clear();
-                }
-            }
+
             Message::ToggleKNN => {
                 self.knn_enabled = !self.knn_enabled;
                 if self.knn_enabled {
@@ -523,7 +513,18 @@ impl RTarde {
                     self.knn_sell_signals.clear();
                 }
             }
-
+            Message::ToggleMomentum => {
+                self.momentum_enabled = !self.momentum_enabled;
+                if self.momentum_enabled {
+                    let (buy_signals, sell_signals) =
+                        calculate_momentum_signals(&self.candlesticks, false);
+                    self.momentum_buy_signals = buy_signals;
+                    self.momentum_sell_signals = sell_signals;
+                } else {
+                    self.momentum_buy_signals.clear();
+                    self.momentum_sell_signals.clear();
+                }
+            }
             Message::UpdateKNNPrediction(prediction) => {
                 self.knn_prediction = prediction;
             }
