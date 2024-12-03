@@ -1,8 +1,8 @@
 use crate::execute_trade;
 use crate::trading::TradeType;
 use crate::AlertType;
-use crate::RTarde;
-pub fn market_buy(r: &mut RTarde) {
+use crate::Futurx;
+pub fn market_buy(r: &mut Futurx) {
     if let Some(info) = r.coin_list.get(&r.selected_coin) {
         if let Some(account_info) = &r.account_info {
             let symbol = format!("{}USDT", r.selected_coin);
@@ -72,7 +72,7 @@ pub fn market_buy(r: &mut RTarde) {
         }
     }
 }
-pub fn market_sell(r: &mut RTarde) {
+pub fn market_sell(r: &mut Futurx) {
     if let Some(info) = r.coin_list.get(&r.selected_coin) {
         if let Some(account_info) = &r.account_info {
             let symbol = format!("{}USDT", r.selected_coin);

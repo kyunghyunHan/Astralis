@@ -5,7 +5,6 @@ mod models;
 mod trading;
 mod ui;
 mod utils;
-
 use api::{
     account::binance_account_connection,
     binance::{binance_connection, fetch_candles, fetch_candles_async, get_top_volume_pairs},
@@ -33,8 +32,9 @@ use ui::{
     trading::{auto_trading_toggle, order_buttons},
     CandleType, Candlestick, Chart, ChartState,
 };
+use utils::{constant as uc, logs as ul};
 
-pub struct RTarde {
+pub struct Futurx {
     candlesticks: BTreeMap<u64, Candlestick>,
     selected_coin: String,
     pub selected_candle_type: CandleType,
@@ -143,7 +143,7 @@ pub struct TradeIndicators {
     volume_ratio: f32,
 }
 
-impl Default for RTarde {
+impl Default for Futurx {
     fn default() -> Self {
         // 거래량 상위 20개 코인 가져오기
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -221,7 +221,7 @@ impl Default for RTarde {
     }
 }
 
-impl RTarde {
+impl Futurx {
     fn binance_account_subscription(&self) -> Subscription<Message> {
         Subscription::run(binance_account_connection)
     }
@@ -397,6 +397,7 @@ impl RTarde {
                             )
                             .await
                             {
+                                println!("{}", ul::ORDER_FAIL);
                                 println!("매수 실패: {:?}", e);
                             }
                         });
@@ -621,11 +622,6 @@ impl RTarde {
                             );
                             self.momentum_buy_signals = buy_signals;
                             self.momentum_sell_signals = sell_signals;
-
-                            // // 예측도 업데이트
-                            // if let Some(prediction) = self.predict_knn() {
-                            //     self.knn_prediction = Some(prediction);
-                            // }
                         }
                         // 가장 오래된 캔들의 날짜 저장
                         if let Some((&timestamp, _)) = self.candlesticks.iter().next() {
@@ -854,8 +850,8 @@ impl<T: 'static> VecDequeExt<T> for VecDeque<(u64, T)> {
 fn main() -> iced::Result {
     dotenv().ok();
 
-    iced::application("Candlestick Chart", RTarde::update, RTarde::view)
-        .subscription(RTarde::subscription)
+    iced::application("Candlestick Chart", Futurx::update, Futurx::view)
+        .subscription(Futurx::subscription)
         .window_size(Size::new(1980., 1080.))
         .run()
 }

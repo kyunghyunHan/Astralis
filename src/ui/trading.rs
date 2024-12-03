@@ -1,6 +1,6 @@
 use crate::utils::constant as uc;
 use crate::Message;
-use crate::RTarde;
+use crate::Futurx;
 use iced::widget::button::Status;
 use iced::widget::button::Style;
 use iced::Background;
@@ -10,8 +10,7 @@ use iced::{
     widget::{button, checkbox, Column, Container, Row, Text},
     Color, Length,
 };
-const BUTTON_ROUND: f32 = 10.;
-pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
+pub fn order_buttons(r: &Futurx) -> Column<'static, Message> {
     Column::new()
         .spacing(10)
         .push(Text::new("Order").size(16))
@@ -24,20 +23,16 @@ pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
                         .style(|_, status| {
                             if status != Status::Hovered {
                                 Style {
-                                    background: Some(Background::Color(Color::from_rgb(
-                                        0.1, 0.3, 0.7,
-                                    ))),
+                                    background: Some(Background::Color(uc::BRIGHT_BLUE)),
                                     text_color: Color::WHITE,
-                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    border: Border::default().rounded(uc::BUTTON_ROUND),
                                     shadow: Shadow::default(),
                                 }
                             } else {
                                 Style {
-                                    background: Some(Background::Color(Color::from_rgb(
-                                        0.3, 0.5, 0.8,
-                                    ))),
+                                    background: Some(Background::Color(uc::DAKR_BLUE)),
                                     text_color: Color::WHITE,
-                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    border: Border::default().rounded(uc::BUTTON_ROUND),
                                     shadow: Shadow::default(),
                                 }
                             }
@@ -53,7 +48,7 @@ pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
                                 Style {
                                     background: Some(Background::Color(uc::DAKR_RED)),
                                     text_color: Color::WHITE,
-                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    border: Border::default().rounded(uc::BUTTON_ROUND),
                                     shadow: Shadow::default(),
                                 }
                             } else {
@@ -61,7 +56,7 @@ pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
                                 Style {
                                     background: Some(Background::Color(uc::BRIGHT_RED)),
                                     text_color: Color::WHITE,
-                                    border: Border::default().rounded(BUTTON_ROUND),
+                                    border: Border::default().rounded(uc::BUTTON_ROUND),
                                     shadow: Shadow::default(),
                                 }
                             }
@@ -70,7 +65,7 @@ pub fn order_buttons(r: &RTarde) -> Column<'static, Message> {
                 ),
         )
 }
-pub fn auto_trading_toggle(r: &RTarde) -> Container<'static, Message> {
+pub fn auto_trading_toggle(r: &Futurx) -> Container<'static, Message> {
     Container::new(
         Row::new()
             .spacing(10)

@@ -1,7 +1,7 @@
 use crate::Message;
-use crate::RTarde;
+use crate::Futurx;
 use iced::widget::{checkbox, Column, Container, Row};
-pub fn ma_controls(r: &RTarde) -> Container<'static, Message> {
+pub fn ma_controls(r: &Futurx) -> Container<'static, Message> {
     let ma_controls =
         Container::new(
             Column::new()

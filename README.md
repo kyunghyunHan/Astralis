@@ -1,4 +1,4 @@
-# Stocki
+# Futurx
 
 
 ## 활용지표

@@ -1,11 +1,11 @@
 use crate::Message;
-use crate::RTarde;
+use crate::Futurx;
 
 use iced::{
     widget::{Column, Container, Row, Text},
     Color, Length,
 };
-pub fn coin_info(r: &RTarde) -> Column<'_, Message> {
+pub fn coin_info(r: &Futurx) -> Column<'_, Message> {
     let coin_info = if let Some(info) = r.coin_list.get(&r.selected_coin) {
         Column::new()
             .spacing(10)
@@ -32,7 +32,7 @@ pub fn coin_info(r: &RTarde) -> Column<'_, Message> {
     };
     coin_info
 }
-pub fn account_info(r: &RTarde) -> Column<'static, Message> {
+pub fn account_info(r: &Futurx) -> Column<'static, Message> {
     Column::new()
         .spacing(10)
         .push(Text::new("Account Info").size(24))
@@ -57,7 +57,7 @@ pub fn account_info(r: &RTarde) -> Column<'static, Message> {
         )
 }
 
-pub fn current_position(r: &RTarde) -> Container<'static, Message> {
+pub fn current_position(r: &Futurx) -> Container<'static, Message> {
     Container::new(
         Column::new()
             .spacing(10)
