@@ -7,7 +7,7 @@ pub fn market_buy(r: &mut Futurx) {
         if let Some(account_info) = &r.account_info {
             let symbol = format!("{}USDT", r.selected_coin);
             let price = info.price;
-            let fixed_usdt = 6.0;
+            let fixed_usdt = 8.0;
 
             // 현재 포지션 확인
             let total_quantity = if let Some(position) =
@@ -77,7 +77,7 @@ pub fn market_sell(r: &mut Futurx) {
         if let Some(account_info) = &r.account_info {
             let symbol = format!("{}USDT", r.selected_coin);
             let price = info.price;
-            let fixed_usdt = 6.0;
+            let fixed_usdt = 8.0;
 
             // 현재 포지션 확인
             let total_quantity = if let Some(position) =
