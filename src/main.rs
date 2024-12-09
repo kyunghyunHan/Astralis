@@ -174,10 +174,7 @@ impl Default for Futurx {
 
         // 만약 API 호출이 실패하면 기본 리스트 사용
         if coin_list.is_empty() {
-            for symbol in &[
-                "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BNB",
-                "SUI", "XLM", "ADA",
-            ] {
+            for symbol in &uc::DEFAULT_ARR {
                 coin_list.insert(
                     symbol.to_string(),
                     CoinInfo {
@@ -244,10 +241,10 @@ impl Futurx {
         let prediction_display = Container::new(Column::new().push(
             if let Some(alert) = self.alerts.front() {
                 Text::new(&alert.message).color(match alert.alert_type {
-                    AlertType::Buy => Color::from_rgb(0.0, 0.8, 0.0),
-                    AlertType::Sell => Color::from_rgb(0.8, 0.0, 0.0),
-                    AlertType::Info => Color::from_rgb(0.0, 0.0, 0.8),
-                    AlertType::Error => Color::from_rgb(0.8, 0.0, 0.0),
+                    AlertType::Buy => uc::BRIGH_GREEN,
+                    AlertType::Sell => uc::BRIGHT_RED,
+                    AlertType::Info => uc::BRIGHT_BLUE,
+                    AlertType::Error => uc::BRIGHT_RED,
                 })
             } else {
                 Text::new("")
@@ -852,6 +849,6 @@ fn main() -> iced::Result {
 
     iced::application("Candlestick Chart", Futurx::update, Futurx::view)
         .subscription(Futurx::subscription)
-        .window_size(Size::new(1980., 1080.))
+        .window_size(Size::new(uc::WINDOW_WIDTH, uc::WINDOW_HIGHT))
         .run()
 }

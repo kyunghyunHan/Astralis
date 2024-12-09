@@ -21,5 +21,17 @@ pub const DAKR_RED: Color = Color::from_rgb(0.7, 0.1, 0.1);
 pub const BRIGHT_BLUE: Color = Color::from_rgb(0.1, 0.3, 0.7);
 pub const DAKR_BLUE: Color = Color::from_rgb(0.3, 0.5, 0.8);
 
-//
+pub const ORNAGE: Color = Color::from_rgb(1.0, 0.647, 0.0);
+pub const BRIGH_GREEN: Color = Color::from_rgb(0.0, 0.8, 0.);
+
 pub const BUTTON_ROUND: f32 = 10.;
+
+//window
+
+pub const WINDOW_WIDTH: f32 = 1980.;
+pub const WINDOW_HIGHT: f32 = 1080.;
+
+pub static DEFAULT_ARR: [&str; 14] = [
+    "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BNB", "SUI", "XLM",
+    "ADA",
+];
