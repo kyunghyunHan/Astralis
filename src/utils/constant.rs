@@ -35,3 +35,10 @@ pub static DEFAULT_ARR: [&str; 14] = [
     "BTC", "ETH", "XRP", "SOL", "DOT", "TRX", "TON", "SHIB", "DOGE", "PEPE", "BNB", "SUI", "XLM",
     "ADA",
 ];
+
+
+//address
+
+pub static  BINANCE_FAPI_ADDRESS :&str = "https://fapi.binance.com/fapi/v1";
+pub static  BINANCE_FWSS_ADDRESS :&str = "wss://fstream.binance.com/ws";
+

@@ -15,7 +15,7 @@ use iced::{
     futures::channel::mpsc,
     time::{Duration, Instant},
     widget::{canvas::Canvas, container, pick_list, Column, Container, Row, Text},
-    Color, Element, Length,
+    Element, Length,
     Length::FillPortion,
     Size, Subscription,
 };

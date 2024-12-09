@@ -616,7 +616,7 @@ impl<Message> Program<Message> for Chart {
                         }
                     }),
                     canvas::Stroke::default()
-                        .with_color(Color::from_rgb(1.0, 0.647, 0.0)) // 주황색
+                        .with_color(uc::ORNAGE) // 주황색
                         .with_width(1.0),
                 );
             }

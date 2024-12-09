@@ -1,4 +1,6 @@
 use crate::api::binance::get_symbol_info;
+use crate::uc;
+use crate::ul;
 use crate::utils::adjust_precision;
 use crate::utils::hmac_sha256;
 use crate::AlertType;
@@ -40,8 +42,10 @@ pub async fn execute_trade(
 
     let signature = hmac_sha256(&api_secret, &params);
     let url = format!(
-        "https://fapi.binance.com/fapi/v1/order?{}&signature={}",
-        params, signature
+        "{}/order?{}&signature={}",
+        uc::BINANCE_FAPI_ADDRESS,
+        params,
+        signature
     );
 
     let client = reqwest::Client::new();
@@ -95,7 +99,7 @@ pub async fn execute_trade(
             executed_qty.parse::<f64>().unwrap_or(0.0) * avg_price.parse::<f64>().unwrap_or(0.0)
         );
 
-        println!("Order success: {}", message);
+        println!("{}: {}", ul::ORDER_SUCCESS, message);
 
         alert_sender
             .send((
@@ -109,8 +113,8 @@ pub async fn execute_trade(
 
         Ok(())
     } else {
-        let error_message = format!("order failed: {}", response_text);
-        println!("Order failed: {}", error_message);
+        let error_message = format!("{}: {}", ul::ORDER_FAIL, response_text);
+        println!("{}: {}", ul::ORDER_FAIL, error_message);
 
         alert_sender
             .send((error_message.clone(), AlertType::Error))

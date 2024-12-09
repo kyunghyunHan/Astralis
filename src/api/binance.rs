@@ -1,4 +1,5 @@
 use crate::api::BinanceCandle;
+use crate::uc;
 use crate::BinanceTrade;
 use crate::Message;
 use crate::{CandleType, Candlestick};
@@ -19,8 +20,8 @@ pub fn binance_connection() -> impl Stream<Item = Message> {
 
         loop {
             let url = Url::parse(&format!(
-                "wss://fstream.binance.com/ws/{}@aggTrade",  // @trade를 @aggTrade로 변경
-                current_coin.to_lowercase()
+                "{}/{}@aggTrade",  // @trade를 @aggTrade로 변경
+                uc::BINANCE_FWSS_ADDRESS,current_coin.to_lowercase()
             )).unwrap();
 
             match connect_async(url).await {
@@ -107,8 +108,11 @@ pub async fn fetch_candles_async(
     };
 
     let url = format!(
-        "https://fapi.binance.com/fapi/v1/klines?symbol={}&interval={}&limit={}",
-        binance_symbol, interval, count
+        "{}/klines?symbol={}&interval={}&limit={}",
+        uc::BINANCE_FAPI_ADDRESS,
+        binance_symbol,
+        interval,
+        count
     );
 
     let client = reqwest::Client::new();
@@ -160,7 +164,7 @@ pub fn fetch_candles(
     rt.block_on(fetch_candles_async(market, candle_type, to_date))
 }
 pub async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
-    let url = "https://fapi.binance.com/fapi/v1/ticker/24hr";
+    let url = format!("{}/ticker/24hr", uc::BINANCE_FAPI_ADDRESS);
 
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
@@ -187,7 +191,7 @@ pub async fn get_top_volume_pairs() -> Result<Vec<(String, f64)>, Box<dyn std::e
 }
 
 pub async fn get_symbol_info(symbol: &str) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-    let url = "https://fapi.binance.com/fapi/v1/exchangeInfo";
+    let url = format!("{}/exchangeInfo", uc::BINANCE_FAPI_ADDRESS);
     let response = reqwest::get(url).await?;
     let info: serde_json::Value = response.json().await?;
 
