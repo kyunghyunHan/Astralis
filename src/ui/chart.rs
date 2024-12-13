@@ -1,4 +1,4 @@
-use crate::utils::constant as uc; //utils constant
+use crate::utils::constant as uc;
 use crate::{CandleType, Candlestick, Chart, ChartState};
 use iced::{
     mouse,
@@ -11,7 +11,7 @@ use iced::{
     },
     Color, Pixels, Point, Rectangle, Size,
 };
-use std::collections::{BTreeMap, VecDeque}; // Add this at the top with other imports
+use std::collections::{BTreeMap, VecDeque};
 
 pub fn calculate_knn_signals(
     candlesticks: &BTreeMap<u64, Candlestick>,
@@ -214,7 +214,6 @@ pub fn calculate_momentum_signals(
 ) -> (BTreeMap<u64, f32>, BTreeMap<u64, f32>) {
     let mut buy_signals = BTreeMap::new();
     let mut sell_signals = BTreeMap::new();
-    println!("Candle Type: {:?}", candle_type);
 
     let (period, momentum_threshold, volume_threshold) = match candle_type {
         CandleType::Minute1 => (
@@ -227,14 +226,11 @@ pub fn calculate_momentum_signals(
             uc::MOMENTUM_3MINUTE_THRESHOLD,
             uc::MOMENTUM_3MINUTE_VOLUME_THRESHOLD,
         ), // 훨씬 낮은 임계값
-        CandleType::Day => {
-            println!("Using day settings");
-            (
-                uc::MOMENTUM_DAY_PERIOD,
-                uc::MOMENTUM_DAY_THRESHOLD,
-                uc::MOMENTUM_DAY_VOLUME_THRESHOLD,
-            )
-        }
+        CandleType::Day => (
+            uc::MOMENTUM_DAY_PERIOD,
+            uc::MOMENTUM_DAY_THRESHOLD,
+            uc::MOMENTUM_DAY_VOLUME_THRESHOLD,
+        ),
     };
 
     println!(

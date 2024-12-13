@@ -24,6 +24,7 @@ pub const DAKR_BLUE: Color = Color::from_rgb(0.3, 0.5, 0.8);
 pub const ORNAGE: Color = Color::from_rgb(1.0, 0.647, 0.0);
 pub const BRIGH_GREEN: Color = Color::from_rgb(0.0, 0.8, 0.);
 
+pub const MIDIUM_GREEN: Color = Color::from_rgb(0.5, 0.5, 0.5);
 pub const BUTTON_ROUND: f32 = 10.;
 
 //window
@@ -36,9 +37,7 @@ pub static DEFAULT_ARR: [&str; 14] = [
     "ADA",
 ];
 
-
 //address
 
-pub static  BINANCE_FAPI_ADDRESS :&str = "https://fapi.binance.com/fapi/v1";
-pub static  BINANCE_FWSS_ADDRESS :&str = "wss://fstream.binance.com/ws";
-
+pub static BINANCE_FAPI_ADDRESS: &str = "https://fapi.binance.com/fapi/v1";
+pub static BINANCE_FWSS_ADDRESS: &str = "wss://fstream.binance.com/ws";

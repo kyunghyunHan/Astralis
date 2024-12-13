@@ -579,7 +579,6 @@ impl Futurx {
             Message::ToggleMA20 => self.show_ma20 = !self.show_ma20,
             Message::ToggleMA200 => self.show_ma200 = !self.show_ma200,
             Message::SelectCandleType(candle_type) => {
-                // self.add_alert(format!("1"), AlertType::Buy);
                 println!("Changing candle type to: {}", candle_type);
                 self.selected_candle_type = candle_type.clone();
 
