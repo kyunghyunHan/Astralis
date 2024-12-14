@@ -644,7 +644,7 @@ impl<Message> Program<Message> for Chart {
                         }
                     }),
                     canvas::Stroke::default()
-                        .with_color(Color::from_rgb(1.0, 1.0, 0.0)) // 노란색
+                        .with_color(uc::YELLOW) // 노란색
                         .with_width(1.0),
                 );
             }

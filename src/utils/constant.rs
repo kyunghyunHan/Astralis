@@ -26,7 +26,7 @@ pub const BRIGH_GREEN: Color = Color::from_rgb(0.0, 0.8, 0.);
 
 pub const MIDIUM_GREEN: Color = Color::from_rgb(0.5, 0.5, 0.5);
 pub const BUTTON_ROUND: f32 = 10.;
-
+pub const YELLOW: Color = Color::from_rgb(1.0, 1.0, 0.0);
 //window
 
 pub const WINDOW_WIDTH: f32 = 1980.;
