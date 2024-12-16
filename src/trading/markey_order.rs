@@ -1,5 +1,6 @@
 use crate::execute_trade;
 use crate::trading::TradeType;
+use crate::uc;
 use crate::AlertType;
 use crate::Futurx;
 pub fn market_buy(r: &mut Futurx) {
@@ -7,7 +8,6 @@ pub fn market_buy(r: &mut Futurx) {
         if let Some(account_info) = &r.account_info {
             let symbol = format!("{}USDT", r.selected_coin);
             let price = info.price;
-            let fixed_usdt = 8.0;
 
             // 현재 포지션 확인
             let total_quantity = if let Some(position) =
@@ -19,11 +19,11 @@ pub fn market_buy(r: &mut Futurx) {
                     current_position.abs()
                 } else {
                     // 숏 포지션이 없다면 새로운 롱 포지션
-                    fixed_usdt / price
+                    uc::MARKET_BUY_ORDER_PRICE / price
                 }
             } else {
                 // 포지션이 없다면 새로운 롱 포지션
-                fixed_usdt / price
+                uc::MARKET_BUY_ORDER_PRICE / price
             };
 
             if total_quantity > 0.0 {
@@ -77,7 +77,6 @@ pub fn market_sell(r: &mut Futurx) {
         if let Some(account_info) = &r.account_info {
             let symbol = format!("{}USDT", r.selected_coin);
             let price = info.price;
-            let fixed_usdt = 8.0;
 
             let total_quantity = if let Some(position) =
                 account_info.positions.iter().find(|p| p.symbol == symbol)
@@ -88,11 +87,11 @@ pub fn market_sell(r: &mut Futurx) {
                     current_position
                 } else {
                     // 롱 포지션이 없다면 새로운 숏 포지션
-                    fixed_usdt / price
+                    uc::MARKET_SELL_ORDER_PRICE / price
                 }
             } else {
                 // 포지션이 없다면 새로운 숏 포지션
-                fixed_usdt / price
+                uc::MARKET_SELL_ORDER_PRICE / price
             };
 
             if total_quantity > 0.0 {

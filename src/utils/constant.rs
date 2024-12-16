@@ -41,3 +41,9 @@ pub static DEFAULT_ARR: [&str; 14] = [
 
 pub static BINANCE_FAPI_ADDRESS: &str = "https://fapi.binance.com/fapi/v1";
 pub static BINANCE_FWSS_ADDRESS: &str = "wss://fstream.binance.com/ws";
+
+//Market Order
+
+pub const MARKET_SELL_ORDER_PRICE: f64 = 8.;
+pub const MARKET_BUY_ORDER_PRICE: f64 = 8.;
+
