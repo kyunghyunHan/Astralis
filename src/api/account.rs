@@ -3,7 +3,7 @@ use crate::utils::hmac_sha256;
 use crate::Message;
 use crate::Trade;
 use async_stream::stream;
-use futures_util::Stream; // Add this at the top with other imports
+use futures_util::Stream;
 
 use std::env;
 pub fn binance_account_connection() -> impl Stream<Item = Message> {
