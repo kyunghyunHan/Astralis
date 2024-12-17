@@ -1,6 +1,6 @@
 use crate::utils::constant as uc;
-use crate::Message;
 use crate::Futurx;
+use crate::Message;
 use iced::widget::button::Status;
 use iced::widget::button::Style;
 use iced::Background;
@@ -10,6 +10,10 @@ use iced::{
     widget::{button, checkbox, Column, Container, Row, Text},
     Color, Length,
 };
+/*  주문버튼
+   - 빨간색 : 롱 포지션
+   - 파란색 : 숏 포지션
+*/
 pub fn order_buttons(r: &Futurx) -> Column<'static, Message> {
     Column::new()
         .spacing(10)
@@ -81,9 +85,9 @@ pub fn auto_trading_toggle(r: &Futurx) -> Container<'static, Message> {
                 })
                 .size(14)
                 .color(if r.auto_trading_enabled {
-                    Color::from_rgb(0.0, 0.8, 0.0)
+                    uc::BRIGH_GREEN
                 } else {
-                    Color::from_rgb(0.5, 0.5, 0.5)
+                    uc::BRIGH_GRAY
                 }),
             ),
     )
