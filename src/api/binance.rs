@@ -10,6 +10,8 @@ use iced::time::Duration;
 use reqwest::Url;
 use std::collections::{BTreeMap, HashMap};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
+
+//바이낸스 connection
 pub fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
         let (tx, mut rx) = mpsc::channel(100);
@@ -85,6 +87,8 @@ pub fn binance_connection() -> impl Stream<Item = Message> {
         }
     }
 }
+
+//
 pub async fn fetch_candles_async(
     market: &str,
     candle_type: &CandleType,

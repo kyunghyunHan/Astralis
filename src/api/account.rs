@@ -6,6 +6,8 @@ use async_stream::stream;
 use futures_util::Stream;
 
 use std::env;
+
+//binance 계정 연결
 pub fn binance_account_connection() -> impl Stream<Item = Message> {
     stream! {
 
