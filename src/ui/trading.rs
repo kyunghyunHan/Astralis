@@ -69,6 +69,10 @@ pub fn order_buttons(r: &Futurx) -> Column<'static, Message> {
                 ),
         )
 }
+
+/*
+자동 매매 버튼
+*/
 pub fn auto_trading_toggle(r: &Futurx) -> Container<'static, Message> {
     Container::new(
         Row::new()
