@@ -2,6 +2,9 @@ use crate::models::OptimizedKNNPredictor;
 use crate::Candlestick;
 use std::collections::VecDeque;
 
+/*
+KNN 예측 지표
+*/
 impl OptimizedKNNPredictor {
     pub fn new(k: usize, window_size: usize, buffer_size: usize) -> Self {
         Self {
@@ -12,7 +15,11 @@ impl OptimizedKNNPredictor {
         }
     }
 
-    // 특성 추출 최적화
+    // 특성 추출 최적화:가격 데이터 로부터 예측에 사용할 특성들을 추출
+    //1.MA(이동평균)비율
+    //2.RSI(상대 강도 지수)
+    //3.거래량 비율
+    //4.최근 가격 변화율
     pub fn extract_features(&self, candlesticks: &[(&u64, &Candlestick)]) -> Option<Vec<f32>> {
         if candlesticks.len() < self.window_size {
             return None;
@@ -44,7 +51,7 @@ impl OptimizedKNNPredictor {
         Some(features)
     }
 
-    // 이동평균 계산 최적화
+    // 이동평균 계산 최적화:5일 20일 이동 평균 계산
     pub fn calculate_moving_averages(&self, data: &[(&u64, &Candlestick)]) -> (f32, f32) {
         let (ma5, ma20) = data
             .iter()
@@ -64,6 +71,7 @@ impl OptimizedKNNPredictor {
     }
 
     // RSI 계산 최적화
+    //period:기준 날짜
     pub fn calculate_rsi(&self, price_changes: &[f32], period: usize) -> f32 {
         let (gains, losses): (Vec<_>, Vec<_>) = price_changes
             .iter()

@@ -3,8 +3,18 @@ use crate::trading::TradeType;
 use crate::uc;
 use crate::AlertType;
 use crate::Futurx;
+
+/*
+시장가 매수주문 처리 함수
+- 숏포지션이 있으면 :전체 숏 포지션 청산
+- 포지션이 없으면 : 설정된 주문 금액으로 새로운 롱 포지션 생성
+- 실제 거래 실행 및 알림 메세지 생성
+
+*/
 pub fn market_buy(r: &mut Futurx) {
+    //선택한 코인의 정보가 있는지 확인
     if let Some(info) = r.coin_list.get(&r.selected_coin) {
+        //계정 정보가 있는지 확인
         if let Some(account_info) = &r.account_info {
             let symbol = format!("{}USDT", r.selected_coin);
             let price = info.price;
@@ -72,6 +82,13 @@ pub fn market_buy(r: &mut Futurx) {
         }
     }
 }
+
+/*
+시장가 매도 주문 처리 함수
+- 롱 포지션이 있으면 전체 롱 포지션 청산
+- 포지션이 없으면 설정된 주문 금액으로 새로운 숏 포지션 생성
+
+*/
 pub fn market_sell(r: &mut Futurx) {
     if let Some(info) = r.coin_list.get(&r.selected_coin) {
         if let Some(account_info) = &r.account_info {
