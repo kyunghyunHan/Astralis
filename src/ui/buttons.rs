@@ -2,7 +2,7 @@ use crate::Message;
 use crate::Futurx;
 use iced::widget::{checkbox, Column, Container, Row};
 
-//UI
+//지표
 pub fn ma_controls(r: &Futurx) -> Container<'static, Message> {
     let ma_controls =
         Container::new(
