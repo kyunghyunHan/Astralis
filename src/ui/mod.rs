@@ -4,7 +4,7 @@ use iced::Point;
 pub mod buttons;
 pub mod infos;
 pub mod trading;
-
+//chart 구조체
 pub struct Chart {
     pub candlesticks: VecDeque<(u64, Candlestick)>, // BTreeMap에서 VecDeque로 변경
     pub max_data_points: usize,                     // 최대 데이터 포인트 수

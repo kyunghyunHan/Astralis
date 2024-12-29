@@ -12,7 +12,7 @@ use iced::{
     Color, Pixels, Point, Rectangle, Size,
 };
 use std::collections::{BTreeMap, VecDeque};
-
+//knn 차트 
 pub fn calculate_knn_signals(
     candlesticks: &BTreeMap<u64, Candlestick>,
     is_realtime: bool, // 실시간 여부 파라미터 추가
