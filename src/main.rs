@@ -33,39 +33,39 @@ use ui::{
     CandleType, Candlestick, Chart, ChartState,
 };
 use utils::{constant as uc, logs as ul};
-
+//Main
 pub struct Futurx {
-    candlesticks: BTreeMap<u64, Candlestick>,
-    selected_coin: String,
-    pub selected_candle_type: CandleType,
-    coin_list: HashMap<String, CoinInfo>,
-    auto_scroll: bool,
-    ws_sender: Option<mpsc::Sender<String>>,
-    show_ma5: bool,
-    show_ma10: bool,
-    show_ma20: bool,
-    show_ma200: bool,
-    loading_more: bool,          // 추가: 데이터 로딩 중인지 여부
-    oldest_date: Option<String>, // 추가: 가장 오래된 캔들의 날짜
-    knn_enabled: bool,
-    knn_prediction: Option<String>,       // "UP" 또는 "DOWN"
-    knn_buy_signals: BTreeMap<u64, f32>,  // bool에서 f32로 변경
-    knn_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
-    account_info: Option<FuturesAccountInfo>,
-    alerts: VecDeque<Alert>,
-    auto_trading_enabled: bool,       // 자동매매 활성화 상태
-    last_trade_time: Option<Instant>, // 마지막 거래 시간 (과도한 거래 방지용)
-    alert_sender: mpsc::Sender<(String, AlertType)>,
-    average_prices: HashMap<String, f64>,
-    momentum_enabled: bool,
-    momentum_buy_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
-    momentum_sell_signals: BTreeMap<u64, f32>, // bool에서 f32로 변경
+    candlesticks: BTreeMap<u64, Candlestick>, // 캔들스틱 데이터 저장
+    selected_coin: String,                    // 현재 선택된 코인
+    pub selected_candle_type: CandleType,     // 선택된 캔들 타입 (1분,3분,일봉)
+    coin_list: HashMap<String, CoinInfo>,     // 코인 목록 정보
+    auto_scroll: bool,                        // 자동 스크롤 여부
+    ws_sender: Option<mpsc::Sender<String>>,  // WebSocket 메시지 전송자
+    show_ma5: bool,                           // 5일 이동평균선 표시 여부
+    show_ma10: bool,                          // 10일 이동평균선 표시 여부
+    show_ma20: bool,                          // 20일 이동평균선 표시 여부
+    show_ma200: bool,                         // 200일 이동평균선 표시 여부
+    loading_more: bool,                       // 추가 데이터 로딩 중 여부
+    oldest_date: Option<String>,              // 가장 오래된 캔들 날짜
+    knn_enabled: bool,                        // KNN 예측 활성화 여부
+    knn_prediction: Option<String>,           // KNN 예측 결과 ("UP" 또는 "DOWN")
+    knn_buy_signals: BTreeMap<u64, f32>,      // KNN 매수 신호
+    knn_sell_signals: BTreeMap<u64, f32>,     // KNN 매도 신호
+    account_info: Option<FuturesAccountInfo>, // 계좌 정보
+    alerts: VecDeque<Alert>,                  // 알림 메시지 큐
+    auto_trading_enabled: bool,               // 자동매매 활성화 상태
+    last_trade_time: Option<Instant>,         // 마지막 거래 시간
+    alert_sender: mpsc::Sender<(String, AlertType)>, // 알림 메시지 전송자
+    average_prices: HashMap<String, f64>,     // 평균 가격 정보
+    momentum_enabled: bool,                   // 모멘텀 전략 활성화 여부
+    momentum_buy_signals: BTreeMap<u64, f32>, // 모멘텀 매수 신호
+    momentum_sell_signals: BTreeMap<u64, f32>, // 모멘텀 매도 신호
 }
 #[derive(Debug, Clone)]
 struct Alert {
-    message: String,
-    alert_type: AlertType,
-    timestamp: Instant,
+    message: String,       // 알림 메시지 내용
+    alert_type: AlertType, // 알림 타입
+    timestamp: Instant,    // 알림 발생 시간
 }
 #[derive(Debug, Clone)]
 enum AlertType {
@@ -74,6 +74,7 @@ enum AlertType {
     Info,  // 일반 정보
     Error, // 에러
 }
+
 #[derive(Debug, Deserialize, Clone)]
 struct Trade {
     symbol: String,
@@ -88,59 +89,61 @@ struct Trade {
 }
 #[derive(Debug, Clone)]
 pub enum Message {
-    AddCandlestick((u64, BinanceTrade)),
-    RemoveCandlestick,
-    SelectCoin(String),
-    UpdateCoinPrice(String, f64, f64),
-    SelectCandleType(CandleType),
-    Error,
-    WebSocketInit(mpsc::Sender<String>),
-    UpdatePrice(String, f64, f64),                 //가격업데이트
-    ToggleMA5,                                     //5일 이동평균선
-    ToggleMA10,                                    //10일 이동평균선
-    ToggleMA20,                                    //20일 이동평균선
-    ToggleMA200,                                   //200일 이동평균선
-    LoadMoreCandles,                               // 추가
-    MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가
-    ToggleKNN,
-    ToggleMomentum, // KNN 시스템 켜기/끄기
+    AddCandlestick((u64, BinanceTrade)),           // 캔들스틱 추가
+    RemoveCandlestick,                             // 캔들스틱 제거
+    SelectCoin(String),                            // 코인 선택
+    UpdateCoinPrice(String, f64, f64),             // 코인 가격 업데이트
+    SelectCandleType(CandleType),                  // 캔들 타입 선택
+    Error,                                         // 에러 발생
+    WebSocketInit(mpsc::Sender<String>),           // WebSocket 초기화
+    UpdatePrice(String, f64, f64),                 // 가격 업데이트
+    ToggleMA5,                                     // 5일 이동평균선 토글
+    ToggleMA10,                                    // 10일 이동평균선 토글
+    ToggleMA20,                                    // 20일 이동평균선 토글
+    ToggleMA200,                                   // 200일 이동평균선 토글
+    LoadMoreCandles,                               // 추가 캔들 로드
+    MoreCandlesLoaded(BTreeMap<u64, Candlestick>), // 추가 캔들 로드 완료
+    ToggleKNN,                                     // KNN 시스템 토글
+    ToggleMomentum,                                // 모멘텀 시스템 토글
     TryBuy {
-        price: f64,
-        strength: f32,
-        timestamp: u64,
-        indicators: TradeIndicators, // 추가 지표 정보를 위한 구조체
-    },
-    TrySell {
+        // 매수 시도
         price: f64,
         strength: f32,
         timestamp: u64,
         indicators: TradeIndicators,
     },
-    UpdateAccountInfo(FuturesAccountInfo),
-    FetchError(String),
-    AddAlert(String, AlertType),
-    RemoveAlert,
-    Tick,              // 알림 타이머용
-    ToggleAutoTrading, // 자동매매 토글
-    MarketBuy,         // 시장가 매수 메시지 추가
-    MarketSell,        // 시장가 매도 메시지 추가
-    UpdateAveragePrice(String, f64),
+    TrySell {
+        // 매도 시도
+        price: f64,
+        strength: f32,
+        timestamp: u64,
+        indicators: TradeIndicators,
+    },
+    UpdateAccountInfo(FuturesAccountInfo), // 계좌 정보 업데이트
+    FetchError(String),                    // 데이터 가져오기 에러
+    AddAlert(String, AlertType),           // 알림 추가
+    RemoveAlert,                           // 알림 제거
+    Tick,                                  // 타이머 틱
+    ToggleAutoTrading,                     // 자동매매 토글
+    MarketBuy,                             // 시장가 매수
+    MarketSell,                            // 시장가 매도
+    UpdateAveragePrice(String, f64),       // 평균가격 업데이트
 }
-
+//코인 정보 구조체
 #[derive(Debug, Clone)]
 struct CoinInfo {
-    symbol: String,
-    name: String,
-    price: f64,
+    symbol: String, // 코인 심볼
+    name: String,   // 코인 이름
+    price: f64,     // 현재 가격
 }
 
 // 거래 지표 정보를 담는 구조체
 #[derive(Debug, Clone)]
 pub struct TradeIndicators {
-    rsi: f32,
-    ma5: f32,
-    ma20: f32,
-    volume_ratio: f32,
+    rsi: f32,          // RSI 지표
+    ma5: f32,          // 5일 이동평균
+    ma20: f32,         // 20일 이동평균
+    volume_ratio: f32, // 거래량 비율
 }
 
 impl Default for Futurx {
@@ -217,12 +220,13 @@ impl Default for Futurx {
         }
     }
 }
-
+//Main 메서드
 impl Futurx {
+    //바이낸스 계정 구독
     fn binance_account_subscription(&self) -> Subscription<Message> {
         Subscription::run(binance_account_connection)
     }
-
+    //전체 구독 설정
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             // 기존 웹소켓 subscription
@@ -231,10 +235,11 @@ impl Futurx {
             iced::time::every(std::time::Duration::from_millis(100)).map(|_| Message::Tick),
         ])
     }
+    //Websocket 구독 설정
     fn websocket_subscription(&self) -> Subscription<Message> {
         Subscription::run(binance_connection)
     }
-
+    //UI
     pub fn view(&self) -> Element<Message> {
         let ma_controls = ma_controls(&self);
 
@@ -327,6 +332,8 @@ impl Futurx {
             )
             .into()
     }
+
+    //메세지 처리
     pub fn update(&mut self, message: Message) {
         match message {
             Message::UpdateAveragePrice(symbol, price) => {
@@ -574,6 +581,8 @@ impl Futurx {
                     }
                 }
             }
+
+            //이동평슌선 5,10,20,200일선
             Message::ToggleMA5 => self.show_ma5 = !self.show_ma5,
             Message::ToggleMA10 => self.show_ma10 = !self.show_ma10,
             Message::ToggleMA20 => self.show_ma20 = !self.show_ma20,
@@ -833,20 +842,12 @@ impl std::fmt::Display for CandleType {
         }
     }
 }
-trait VecDequeExt<T: 'static> {
-    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)>;
-}
-
-impl<T: 'static> VecDequeExt<T> for VecDeque<(u64, T)> {
-    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &(u64, T)> {
-        self.iter().skip(range.start).take(range.end - range.start)
-    }
-}
 
 fn main() -> iced::Result {
+    //환경변수 설정
     dotenv().ok();
 
-    iced::application("Candlestick Chart", Futurx::update, Futurx::view)
+    iced::application("Futurx", Futurx::update, Futurx::view)
         .subscription(Futurx::subscription)
         .window_size(Size::new(uc::WINDOW_WIDTH, uc::WINDOW_HIGHT))
         .run()
