@@ -19,7 +19,7 @@ use iced::{
     Length::FillPortion,
     Size, Subscription,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use trading::{
     markey_order::{market_buy, market_sell},
@@ -145,6 +145,11 @@ pub struct TradeIndicators {
     ma20: f32,         // 20일 이동평균
     volume_ratio: f32, // 거래량 비율
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderBookEntry {}
+#[derive(Debug, Clone)]
+pub struct OrderBool {}
 
 impl Default for Futurx {
     fn default() -> Self {
