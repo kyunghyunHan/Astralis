@@ -208,20 +208,6 @@ impl Default for Futurx {
             .unwrap();
         panes.split(pane_grid::Axis::Vertical, a.0, Pane::RightSidebar);
 
-        // 첫 번째 분할: Chart와 LeftSidebar로 나눔
-        // let (left_split, left_sidebar_pane) = panes.split(
-        //     pane_grid::Axis::Vertical, // 수직 분할 (좌우로 나눔)
-        //     first_pane,
-        //     Pane::LeftSidebar,
-        // );
-
-        // 두 번째 분할: Chart를 다시 Chart와 RightSidebar로 나눔
-        // let (right_split, right_sidebar_pane) = panes.split(
-        //     pane_grid::Axis::Vertical, // 수직 분할 (좌우로 나눔)
-        //     first_pane,                // 첫 번째 패널을 또 분할
-        //     Pane::RightSidebar,
-        // );
-
         let (alert_sender, alert_receiver) = mpsc::channel(100);
 
         Self {
