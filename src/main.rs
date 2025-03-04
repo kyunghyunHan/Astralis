@@ -261,54 +261,48 @@ impl Futurx {
     }
     //UI
     pub fn view(&self) -> Element<Message> {
-        let ma_controls = ma_controls(&self);
-        let prediction_display = Container::new(Column::new().push(
-            if let Some(alert) = self.alerts.front() {
-                Text::new(&alert.message).color(match alert.alert_type {
-                    AlertType::Buy => uc::BRIGH_GREEN,
-                    AlertType::Sell => uc::BRIGHT_RED,
-                    AlertType::Info => uc::BRIGHT_BLUE,
-                    AlertType::Error => uc::BRIGHT_RED,
-                })
-            } else {
-                Text::new("")
-            },
-        ))
-        .padding(10)
-        .width(Length::Shrink)
-        .height(Length::Shrink);
-
-        let coins: Vec<String> = self.coin_list.keys().cloned().collect();
-        let coin_picker = pick_list(coins, Some(self.selected_coin.clone()), Message::SelectCoin)
-            .width(Length::Fixed(150.0));
-
-        let candle_types = vec![CandleType::Minute1, CandleType::Minute3, CandleType::Day];
-        let candle_type_strings: Vec<String> =
-            candle_types.iter().map(|ct| ct.to_string()).collect();
-        let candle_type_picker = pick_list(
-            candle_type_strings,
-            Some(self.selected_candle_type.to_string()),
-            |s| {
-                let candle_type = match s.as_str() {
-                    "1Minute" => CandleType::Minute1,
-                    "3Minute" => CandleType::Minute3,
-                    "Day" => CandleType::Day,
-                    _ => CandleType::Day,
-                };
-                Message::SelectCandleType(candle_type)
-            },
-        )
-        .width(Length::Fixed(100.0));
-
-        // 상단 컨트롤 영역
-        let top_controls = Row::new()
-            .push(coin_picker.width(FillPortion(1)))
-            .push(candle_type_picker.width(FillPortion(1)))
-            .push(ma_controls.width(FillPortion(8)))
-            .push(prediction_display.width(FillPortion(2)));
-
         // 패널 그리드 구성
         pane_grid(&self.panes, |pane, content_type, is_maximized| {
+            let ma_controls = ma_controls(&self);
+            let prediction_display = Container::new(Column::new().push(
+                if let Some(alert) = self.alerts.front() {
+                    Text::new(&alert.message).color(match alert.alert_type {
+                        AlertType::Buy => uc::BRIGH_GREEN,
+                        AlertType::Sell => uc::BRIGHT_RED,
+                        AlertType::Info => uc::BRIGHT_BLUE,
+                        AlertType::Error => uc::BRIGHT_RED,
+                    })
+                } else {
+                    Text::new("")
+                },
+            ))
+            .padding(10)
+            .width(Length::Shrink)
+            .height(Length::Shrink);
+
+            let coins: Vec<String> = self.coin_list.keys().cloned().collect();
+            let coin_picker =
+                pick_list(coins, Some(self.selected_coin.clone()), Message::SelectCoin)
+                    .width(Length::Fixed(150.0));
+
+            let candle_types = vec![CandleType::Minute1, CandleType::Minute3, CandleType::Day];
+            let candle_type_strings: Vec<String> =
+                candle_types.iter().map(|ct| ct.to_string()).collect();
+            let candle_type_picker = pick_list(
+                candle_type_strings,
+                Some(self.selected_candle_type.to_string()),
+                |s| {
+                    let candle_type = match s.as_str() {
+                        "1Minute" => CandleType::Minute1,
+                        "3Minute" => CandleType::Minute3,
+                        "Day" => CandleType::Day,
+                        _ => CandleType::Day,
+                    };
+                    Message::SelectCandleType(candle_type)
+                },
+            )
+            .width(Length::Fixed(100.0));
+
             match content_type {
                 // 차트 패널
                 Pane::Chart => {
@@ -330,11 +324,18 @@ impl Futurx {
                     .width(iced::Fill)
                     .height(iced::Fill);
 
-                    let title_bar =
-                        pane_grid::TitleBar::new(Text::new("차트").size(16)).padding(10);
-                    // .style(pane_grid::title_bar::Style::default());
-
-                    pane_grid::Content::new(canvas).title_bar(title_bar)
+                    // 상단 컨트롤 영역
+                    let top_controls = Row::new()
+                        .push(coin_picker.width(FillPortion(1)))
+                        .push(candle_type_picker.width(FillPortion(1)))
+                        .push(ma_controls.width(FillPortion(8)))
+                        .push(prediction_display.width(FillPortion(2)));
+                    let chart_body = Column::new()
+                        .push(Row::new().push(top_controls.width(FillPortion(1))))
+                        .push(
+                            Row::new().push(container(canvas).width(FillPortion(4))), // .push(container(right_side_bar).width(FillPortion(1))),
+                        );
+                    pane_grid::Content::new(Container::new(chart_body))
                 }
 
                 // 좌측 사이드바 패널 (코인 정보)
@@ -344,8 +345,6 @@ impl Futurx {
 
                     let title_bar =
                         pane_grid::TitleBar::new(Text::new("코인 정보").size(16)).padding(10);
-                    // .style(pane_grid::title_bar::Style::default());
-
                     pane_grid::Content::new(left_side_bar).title_bar(title_bar)
                 }
 
@@ -366,8 +365,6 @@ impl Futurx {
 
                     let title_bar =
                         pane_grid::TitleBar::new(Text::new("거래 정보").size(16)).padding(10);
-                    // .style(pane_grid::title_bar::Style::default());
-
                     pane_grid::Content::new(right_side_bar).title_bar(title_bar)
                 }
 
