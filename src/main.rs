@@ -370,7 +370,7 @@ impl Futurx {
 
                 // 기타 패널 유형
                 _ => {
-                    let title = "기타 패널";
+                    let title = "utils";
                     let header = pane_grid::TitleBar::new(Text::new(title)).padding(10);
                     let content = Text::new("추가 패널 내용");
 
