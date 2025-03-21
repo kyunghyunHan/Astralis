@@ -902,24 +902,63 @@ use dotenv::dotenv;
 // mod ui;
 mod utils;
 
+use iced::widget::canvas::path::lyon_path;
 use iced::{
     futures::channel::mpsc,
+    mouse,
     time::{Duration, Instant},
-    widget::{canvas::Canvas, container, pane_grid, pick_list, text, Column, Container, Row, Text},
+    widget::{
+        canvas::{self, Canvas, Frame, Path, Stroke},
+        container, pane_grid, pick_list, text, Column, Container, Row, Text,
+    },
     Element, Length,
     Length::FillPortion,
-    Size, Subscription,
+    Point, Rectangle, Size, Subscription,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
-
 use utils::{constant as uc, logs as ul};
 #[derive(Debug, Clone)]
-pub enum Message {}
+pub enum Message {
+    PaneDragged(pane_grid::DragEvent),   // 매개변수 필요
+    PaneResized(pane_grid::ResizeEvent), // 매개변수 필요
+}
 pub struct Futurx {
     panes: pane_grid::State<Pane>,
 }
+struct Chart;
+#[derive(Default, Debug)]
+pub struct ChartState {} // Candlestick 구조체 업데이트
+impl canvas::Program<Message> for Chart {
+    type State = ChartState;
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let path = Path::new(|p| {
+            p.move_to(Point::new(50.0, 50.0));
 
+            p.line_to(Point::new(200.0, 100.0));
+            p.line_to(Point::new(300.0, 50.0));
+        });
+        // 경로 생성
+
+        // 경로 렌더링
+        frame.stroke(
+            &path,
+            Stroke::default()
+                .with_width(2.0)
+                .with_color([0.0, 0.5, 0.8, 1.0].into()),
+        );
+
+        vec![frame.into_geometry()]
+    }
+}
 enum Pane {
     Chart,
     LeftSidebar,
@@ -928,21 +967,61 @@ enum Pane {
 impl Default for Futurx {
     fn default() -> Self {
         let (mut panes, first_pane) = pane_grid::State::new(Pane::Chart);
-        // let a = panes
-        //     .split(pane_grid::Axis::Vertical, first_pane, Pane::LeftSidebar)
-        //     .unwrap();
-        // panes.split(pane_grid::Axis::Vertical, a.0, Pane::RightSidebar);
 
         Self { panes: panes }
     }
 }
 impl Futurx {
-    pub fn update(&mut self, message: Message) {}
+    pub fn update(&mut self, message: Message) {
+        match message {
+            Message::PaneDragged(drag_event) => match drag_event {
+                pane_grid::DragEvent::Dropped { pane, target } => {
+                    if let iced::widget::pane_grid::Target::Pane(dest_pane, _region) = &target {
+                        self.panes.swap(pane, *dest_pane);
+                    } else {
+                        println!("Not")
+                    }
+                }
+
+                _ => {}
+            },
+            Message::PaneResized(resize_event) => {
+                // 리사이즈 이벤트 처리
+                let pane_grid::ResizeEvent { split, ratio } = resize_event;
+                println!("분할선 {:?}의 비율이 {:.2}로 변경됨", split, ratio);
+
+                // 분할선 위치 업데이트 로직
+                // 예시 코드 (실제 API에 맞게 수정 필요)
+                // self.panes.update_ratio(split, ratio);
+            } // 다른 메시지 처리
+        }
+    }
     pub fn view(&self) -> Element<Message> {
         // 패널 그리드 구성
-        pane_grid(&self.panes, |pane, content_type, is_maximized| {
-            Text::new("Example Content").into()
+        pane_grid::PaneGrid::new(&self.panes, |_pane, content_type, _is_maximized| {
+            match content_type {
+                Pane::Chart => {
+                    // Canvas를 Column으로 감싸서 Element<Message>로 변환
+                    Container::new(Column::new().push(Canvas::new(Chart).width(Length::Fill)))
+                        .into()
+                }
+                Pane::LeftSidebar => {
+                    Container::new(Column::new().push(Text::new("Left Sidebar"))).into()
+                }
+                Pane::RightSidebar => {
+                    Container::new(Column::new().push(Text::new("Right Sidebar"))).into()
+                }
+                _ => {
+                    let title = "utils";
+                    let header = pane_grid::TitleBar::new(Text::new(title)).padding(10);
+                    let content = Text::new("추가 패널 내용");
+
+                    pane_grid::Content::new(content).title_bar(header)
+                }
+            }
         })
+        .on_drag(Message::PaneDragged)
+        .on_resize(10, Message::PaneResized)
         .into()
     }
 }
