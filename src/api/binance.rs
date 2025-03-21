@@ -7,13 +7,13 @@ use async_stream::stream;
 use futures_util::Stream;
 use iced::futures::{channel::mpsc, StreamExt};
 use iced::time::Duration;
-use reqwest::Url;
 use std::collections::{BTreeMap, HashMap};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as ME};
 
 //바이낸스 connection
 pub fn binance_connection() -> impl Stream<Item = Message> {
     stream! {
+        //buffer size 100
         let (tx, mut rx) = mpsc::channel(100);
         let mut current_coin = "btcusdt".to_string();
         let mut last_prices: HashMap<String, f64> = HashMap::new();
@@ -21,12 +21,14 @@ pub fn binance_connection() -> impl Stream<Item = Message> {
         yield Message::WebSocketInit(tx.clone());
 
         loop {
-            let url = Url::parse(&format!(
-                "{}/{}@aggTrade",  // @trade를 @aggTrade로 변경
-                uc::BINANCE_FWSS_ADDRESS,current_coin.to_lowercase()
-            )).unwrap();
+            let url_string = format!(
+                "{}/{}@aggTrade",
+                uc::BINANCE_FWSS_ADDRESS,
+                current_coin.to_lowercase()
+            );
 
-            match connect_async(url).await {
+
+            match connect_async(url_string).await {
                 Ok((mut ws_stream, _)) => {
                     println!("Connected to futures stream for {}", current_coin);
 
