@@ -945,8 +945,14 @@ impl canvas::Program<Message> for Chart {
         println!("{:?}", bounds.size());
         let path = Path::new(|p| {
             p.move_to(Point::new(50., bounds.height - 50.));
-            p.line_to(Point::new(200.0, 100.0));
-            p.line_to(Point::new(300.0, 100.0));
+            // p.line_to(Point::new(200.0, 100.0));
+            for i in 1..100 {
+                p.line_to(Point::new(
+                    100. + i as f32,
+                    bounds.height - (100.0 + i as f32),
+                ));
+            }
+            // p.line_to(Point::new(300.0, 100.0));
         });
         // 경로 생성
 
