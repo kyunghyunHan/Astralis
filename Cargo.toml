@@ -10,7 +10,7 @@ futures-util = "0.3"
 serde_json = "1.0.140"
 chrono = "0.4.40"
 reqwest = { version = "0.12.15", features = ["json"] }
-iced = { version = "0.13.1", features = ["canvas", "tokio"] }
+iced = { version = "0.13.1", features = ["canvas", "tokio","wgpu"] }
 serde = { version = "1.0.219", features = ["derive"] }
 async-stream = "0.3"
 hmac = "0.12"

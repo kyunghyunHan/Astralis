@@ -933,6 +933,7 @@ impl canvas::Program<Message> for Chart {
     type State = ChartState;
     fn draw(
         &self,
+        // device: &mut wgpu::Device,
         state: &Self::State,
         renderer: &iced::Renderer,
         _theme: &iced::Theme,
@@ -942,9 +943,8 @@ impl canvas::Program<Message> for Chart {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let path = Path::new(|p| {
             p.move_to(Point::new(50.0, 50.0));
-
             p.line_to(Point::new(200.0, 100.0));
-            p.line_to(Point::new(300.0, 50.0));
+            p.line_to(Point::new(300.0, 100.0));
         });
         // 경로 생성
 
