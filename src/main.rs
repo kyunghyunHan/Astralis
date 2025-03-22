@@ -941,8 +941,10 @@ impl canvas::Program<Message> for Chart {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        println!("{:?}", bounds.size());
         let path = Path::new(|p| {
-            p.move_to(Point::new(50.0, 50.0));
+            p.move_to(Point::new(50., bounds.height - 50.));
             p.line_to(Point::new(200.0, 100.0));
             p.line_to(Point::new(300.0, 100.0));
         });
@@ -1002,8 +1004,11 @@ impl Futurx {
             match content_type {
                 Pane::Chart => {
                     // Canvas를 Column으로 감싸서 Element<Message>로 변환
-                    Container::new(Column::new().push(Canvas::new(Chart).width(Length::Fill)))
-                        .into()
+                    Container::new(
+                        Column::new()
+                            .push(Canvas::new(Chart).width(Length::Fill).height(Length::Fill)),
+                    )
+                    .into()
                 }
                 Pane::LeftSidebar => {
                     Container::new(Column::new().push(Text::new("Left Sidebar"))).into()
@@ -1028,7 +1033,6 @@ impl Futurx {
 fn main() -> iced::Result {
     //환경변수 설정
     dotenv().ok();
-
     iced::application("Futurx", Futurx::update, Futurx::view)
         // .subscription(Futurx::subscription)
         .window_size(Size::new(1900., 1020.))
