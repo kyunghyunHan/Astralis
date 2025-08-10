@@ -147,8 +147,8 @@ async fn fetch_binance_data(
             }
         }
         
-        // Wait 30 seconds before next update
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        // Wait 5 seconds before next update (more frequent updates)
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 }
 
@@ -236,7 +236,6 @@ impl CryptoApp {
     }
     
     fn switch_crypto(&mut self, new_crypto: CryptoSymbol) {
-        // println!("🔄 Switching to: {:?}", new_crypto);
         self.selected_crypto = new_crypto.clone();
         self.is_loading = true;
         
@@ -305,7 +304,6 @@ impl eframe::App for CryptoApp {
                     });
                 
                 if crypto_changed {
-                    // println!("🔄 Crypto selection changed to: {:?}", self.selected_crypto);
                     self.switch_crypto(self.selected_crypto.clone());
                 }
                 
