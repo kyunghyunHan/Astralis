@@ -1,26 +1,15 @@
 [package]
-name = "Futurx"
+name = "Astralis"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.44.1", features = ["full"] }
-tokio-tungstenite = { version = "0.26.2", features = ["native-tls"] }
-futures-util = "0.3"
-serde_json = "1.0.140"
-chrono = "0.4.40"
-reqwest = { version = "0.12.15", features = ["json"] }
-iced = { version = "0.13.1", features = ["canvas", "tokio","wgpu"] }
-serde = { version = "1.0.219", features = ["derive"] }
-async-stream = "0.3"
-hmac = "0.12"
-sha2 = "0.10"
-hex = "0.4"
-dotenv = "0.15.0"
-
-[profile.release]
-opt-level = 3           # 최대 최적화
-lto = true             # 링크 타임 최적화
-codegen-units = 1      # 더 나은 최적화를 위해 단일 유닛으로 생성
-panic = 'abort'        # 패닉 시 언와인딩 대신 즉시 중단
-strip = true           # 디버그 심볼 제거
+clap = { version="4.5.43", features=["derive"]}
+eframe = "0.32.0"
+egui = "0.32.0"
+egui_plot = "0.33.0"
+tracing = "0.1.36"
+tracing-subscriber = "0.3.15"
+serde = { version = "1.0", features = ["derive"] }
+chrono = "0.4.41"
+fastrand = "2.3.0"
