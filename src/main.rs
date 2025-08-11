@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1600.0, 900.0])  // 더 큰 창 크기
+            .with_inner_size([1600.0, 900.0])
             .with_title("Crypto Trading Chart"),
         ..Default::default()
     };
@@ -40,17 +40,17 @@ enum ChartType {
 
 #[derive(Clone, PartialEq)]
 enum Timeframe {
-    M1,   // 1분
-    M3,   // 3분
-    M5,   // 5분
-    M15,  // 15분
-    M30,  // 30분
-    H1,   // 1시간
-    H4,   // 4시간
-    H12,  // 12시간
-    D1,   // 일봉
-    W1,   // 주봉
-    MN1,  // 월봉
+    M1,   // 1 minute
+    M3,   // 3 minutes
+    M5,   // 5 minutes
+    M15,  // 15 minutes
+    M30,  // 30 minutes
+    H1,   // 1 hour
+    H4,   // 4 hours
+    H12,  // 12 hours
+    D1,   // Daily
+    W1,   // Weekly
+    MN1,  // Monthly
 }
 
 impl Timeframe {
@@ -72,50 +72,50 @@ impl Timeframe {
     
     fn to_display_string(&self) -> &'static str {
         match self {
-            Timeframe::M1 => "1분",
-            Timeframe::M3 => "3분",
-            Timeframe::M5 => "5분",
-            Timeframe::M15 => "15분",
-            Timeframe::M30 => "30분",
-            Timeframe::H1 => "1시간",
-            Timeframe::H4 => "4시간",
-            Timeframe::H12 => "12시간",
-            Timeframe::D1 => "일봉",
-            Timeframe::W1 => "주봉",
-            Timeframe::MN1 => "월봉",
+            Timeframe::M1 => "1m",
+            Timeframe::M3 => "3m",
+            Timeframe::M5 => "5m",
+            Timeframe::M15 => "15m",
+            Timeframe::M30 => "30m",
+            Timeframe::H1 => "1h",
+            Timeframe::H4 => "4h",
+            Timeframe::H12 => "12h",
+            Timeframe::D1 => "1d",
+            Timeframe::W1 => "1w",
+            Timeframe::MN1 => "1M",
         }
     }
     
     fn get_window_size(&self) -> f64 {
         match self {
-            Timeframe::M1 => 60.0 * 100.0,      // 100분
-            Timeframe::M3 => 60.0 * 300.0,      // 300분
-            Timeframe::M5 => 60.0 * 500.0,      // 500분
-            Timeframe::M15 => 60.0 * 1500.0,    // 1500분
-            Timeframe::M30 => 60.0 * 3000.0,    // 3000분
-            Timeframe::H1 => 60.0 * 60.0 * 100.0,   // 100시간
-            Timeframe::H4 => 60.0 * 60.0 * 400.0,   // 400시간
-            Timeframe::H12 => 60.0 * 60.0 * 1200.0, // 1200시간
-            Timeframe::D1 => 60.0 * 60.0 * 24.0 * 100.0, // 100일
-            Timeframe::W1 => 60.0 * 60.0 * 24.0 * 7.0 * 50.0, // 50주
-            Timeframe::MN1 => 60.0 * 60.0 * 24.0 * 30.0 * 12.0, // 12개월
+            Timeframe::M1 => 60.0 * 100.0,      // 100 minutes
+            Timeframe::M3 => 60.0 * 300.0,      // 300 minutes
+            Timeframe::M5 => 60.0 * 500.0,      // 500 minutes
+            Timeframe::M15 => 60.0 * 1500.0,    // 1500 minutes
+            Timeframe::M30 => 60.0 * 3000.0,    // 3000 minutes
+            Timeframe::H1 => 60.0 * 60.0 * 100.0,   // 100 hours
+            Timeframe::H4 => 60.0 * 60.0 * 400.0,   // 400 hours
+            Timeframe::H12 => 60.0 * 60.0 * 1200.0, // 1200 hours
+            Timeframe::D1 => 60.0 * 60.0 * 24.0 * 100.0, // 100 days
+            Timeframe::W1 => 60.0 * 60.0 * 24.0 * 7.0 * 50.0, // 50 weeks
+            Timeframe::MN1 => 60.0 * 60.0 * 24.0 * 30.0 * 12.0, // 12 months
         }
     }
     
-    // 캔들 간격 계산 (초 단위)
+    // Calculate candle interval in seconds
     fn get_candle_interval(&self) -> f64 {
         match self {
-            Timeframe::M1 => 60.0,           // 1분
-            Timeframe::M3 => 180.0,          // 3분
-            Timeframe::M5 => 300.0,          // 5분
-            Timeframe::M15 => 900.0,         // 15분
-            Timeframe::M30 => 1800.0,        // 30분
-            Timeframe::H1 => 3600.0,         // 1시간
-            Timeframe::H4 => 14400.0,        // 4시간
-            Timeframe::H12 => 43200.0,       // 12시간
-            Timeframe::D1 => 86400.0,        // 1일
-            Timeframe::W1 => 604800.0,       // 1주
-            Timeframe::MN1 => 2592000.0,     // 1개월 (30일)
+            Timeframe::M1 => 60.0,           // 1 minute
+            Timeframe::M3 => 180.0,          // 3 minutes
+            Timeframe::M5 => 300.0,          // 5 minutes
+            Timeframe::M15 => 900.0,         // 15 minutes
+            Timeframe::M30 => 1800.0,        // 30 minutes
+            Timeframe::H1 => 3600.0,         // 1 hour
+            Timeframe::H4 => 14400.0,        // 4 hours
+            Timeframe::H12 => 43200.0,       // 12 hours
+            Timeframe::D1 => 86400.0,        // 1 day
+            Timeframe::W1 => 604800.0,       // 1 week
+            Timeframe::MN1 => 2592000.0,     // 1 month (30 days)
         }
     }
 }
@@ -150,7 +150,7 @@ impl Default for TradingPanel {
             quantity: "0.001".to_string(),
             price: "0.0".to_string(),
             current_price: 0.0,
-            balance_usdt: 10000.0,  // 가상 잔고
+            balance_usdt: 10000.0,  // Virtual balance
             balance_btc: 0.0,
         }
     }
@@ -342,22 +342,22 @@ impl eframe::App for CryptoApp {
         // Top controls
         egui::TopBottomPanel::top("control_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label("시간봉:");
+                ui.label("Timeframe:");
                 let old_timeframe = self.timeframe.clone();
                 egui::ComboBox::from_id_salt("timeframe")
                     .selected_text(self.timeframe.to_display_string())
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.timeframe, Timeframe::M1, "1분");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::M3, "3분");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::M5, "5분");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::M15, "15분");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::M30, "30분");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::H1, "1시간");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::H4, "4시간");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::H12, "12시간");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::D1, "일봉");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::W1, "주봉");
-                        ui.selectable_value(&mut self.timeframe, Timeframe::MN1, "월봉");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::M1, "1m");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::M3, "3m");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::M5, "5m");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::M15, "15m");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::M30, "30m");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::H1, "1h");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::H4, "4h");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::H12, "12h");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::D1, "1d");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::W1, "1w");
+                        ui.selectable_value(&mut self.timeframe, Timeframe::MN1, "1M");
                     });
                 
                 if old_timeframe != self.timeframe {
@@ -383,26 +383,26 @@ impl eframe::App for CryptoApp {
                 
                 ui.separator();
                 
-                ui.label("차트:");
+                ui.label("Chart:");
                 egui::ComboBox::from_id_salt("chart_type")
                     .selected_text(match self.chart_type {
-                        ChartType::Line => "라인",
-                        ChartType::Candlestick => "캔들",
+                        ChartType::Line => "Line",
+                        ChartType::Candlestick => "Candle",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.chart_type, ChartType::Line, "라인");
-                        ui.selectable_value(&mut self.chart_type, ChartType::Candlestick, "캔들");
+                        ui.selectable_value(&mut self.chart_type, ChartType::Line, "Line");
+                        ui.selectable_value(&mut self.chart_type, ChartType::Candlestick, "Candle");
                     });
                 
                 if self.chart_type == ChartType::Candlestick {
                     ui.separator();
-                    ui.label("캔들 크기:");
+                    ui.label("Candle Size:");
                     ui.add(egui::Slider::new(&mut self.candle_width, 0.3..=3.0).text(""));
                 }
                 
                 ui.separator();
                 
-                if ui.button("라이브").clicked() {
+                if ui.button("Live").clicked() {
                     let buffer = match self.timeframe {
                         Timeframe::M1 => 60.0 * 5.0,
                         Timeframe::M3 => 60.0 * 15.0,
@@ -420,16 +420,16 @@ impl eframe::App for CryptoApp {
                 ui.separator();
                 
                 if !self.trading_panel.current_price.is_nan() && self.trading_panel.current_price > 0.0 {
-                    ui.colored_label(egui::Color32::WHITE, format!("현재가: ${:.2}", self.trading_panel.current_price));
+                    ui.colored_label(egui::Color32::WHITE, format!("Price: ${:.2}", self.trading_panel.current_price));
                 }
                 
                 if self.is_loading {
-                    ui.colored_label(egui::Color32::YELLOW, "로딩중...");
+                    ui.colored_label(egui::Color32::YELLOW, "Loading...");
                 } else {
                     if self.is_live_mode {
-                        ui.colored_label(egui::Color32::GREEN, "🔴 라이브");
+                        ui.colored_label(egui::Color32::GREEN, "🔴 LIVE");
                     } else {
-                        ui.colored_label(egui::Color32::LIGHT_BLUE, "📜 히스토리");
+                        ui.colored_label(egui::Color32::LIGHT_BLUE, "📜 History");
                     }
                 }
             });
@@ -437,53 +437,53 @@ impl eframe::App for CryptoApp {
         
         // Main layout with side panel for trading
         egui::SidePanel::right("trading_panel").min_width(300.0).show(ctx, |ui| {
-            ui.heading("💰 매매");
+            ui.heading("💰 Trading");
             ui.separator();
             
-            // 잔고 표시
+            // Balance display
             ui.group(|ui| {
-                ui.label("💳 잔고");
+                ui.label("💳 Balance");
                 ui.label(format!("USDT: ${:.2}", self.trading_panel.balance_usdt));
                 ui.label(format!("BTC: {:.6}", self.trading_panel.balance_btc));
             });
             
             ui.separator();
             
-            // 주문 타입
+            // Order type
             ui.horizontal(|ui| {
-                ui.label("주문:");
-                ui.selectable_value(&mut self.trading_panel.order_type, OrderType::Buy, "🟢 매수");
-                ui.selectable_value(&mut self.trading_panel.order_type, OrderType::Sell, "🔴 매도");
+                ui.label("Order:");
+                ui.selectable_value(&mut self.trading_panel.order_type, OrderType::Buy, "🟢 Buy");
+                ui.selectable_value(&mut self.trading_panel.order_type, OrderType::Sell, "🔴 Sell");
             });
             
-            // 주문 방식
+            // Order mode
             ui.horizontal(|ui| {
-                ui.label("방식:");
-                ui.selectable_value(&mut self.trading_panel.order_mode, OrderMode::Market, "시장가");
-                ui.selectable_value(&mut self.trading_panel.order_mode, OrderMode::Limit, "지정가");
+                ui.label("Type:");
+                ui.selectable_value(&mut self.trading_panel.order_mode, OrderMode::Market, "Market");
+                ui.selectable_value(&mut self.trading_panel.order_mode, OrderMode::Limit, "Limit");
             });
             
             ui.separator();
             
-            // 수량 입력
+            // Quantity input
             ui.horizontal(|ui| {
-                ui.label("수량:");
+                ui.label("Quantity:");
                 ui.text_edit_singleline(&mut self.trading_panel.quantity);
                 ui.label("BTC");
             });
             
-            // 가격 입력 (지정가일 때만)
+            // Price input (only for limit orders)
             if self.trading_panel.order_mode == OrderMode::Limit {
                 ui.horizontal(|ui| {
-                    ui.label("가격:");
+                    ui.label("Price:");
                     ui.text_edit_singleline(&mut self.trading_panel.price);
                     ui.label("USDT");
                 });
             } else {
-                // 시장가일 때 현재가 표시
+                // Show current price for market orders
                 if !self.trading_panel.current_price.is_nan() && self.trading_panel.current_price > 0.0 {
                     ui.horizontal(|ui| {
-                        ui.label("예상가:");
+                        ui.label("Est. Price:");
                         ui.colored_label(egui::Color32::YELLOW, format!("${:.2}", self.trading_panel.current_price));
                     });
                 }
@@ -491,23 +491,23 @@ impl eframe::App for CryptoApp {
             
             ui.separator();
             
-            // 주문 버튼
+            // Order button
             let button_color = match self.trading_panel.order_type {
                 OrderType::Buy => egui::Color32::from_rgb(0, 200, 100),
                 OrderType::Sell => egui::Color32::from_rgb(255, 100, 100),
             };
             
             let button_text = match (&self.trading_panel.order_type, &self.trading_panel.order_mode) {
-                (OrderType::Buy, OrderMode::Market) => "시장가 매수",
-                (OrderType::Buy, OrderMode::Limit) => "지정가 매수",
-                (OrderType::Sell, OrderMode::Market) => "시장가 매도",
-                (OrderType::Sell, OrderMode::Limit) => "지정가 매도",
+                (OrderType::Buy, OrderMode::Market) => "Market Buy",
+                (OrderType::Buy, OrderMode::Limit) => "Limit Buy",
+                (OrderType::Sell, OrderMode::Market) => "Market Sell",
+                (OrderType::Sell, OrderMode::Limit) => "Limit Sell",
             };
             
             if ui.add_sized([ui.available_width(), 40.0], 
                 egui::Button::new(button_text).fill(button_color)
             ).clicked() {
-                // 주문 처리 (여기서는 가상 처리)
+                // Order processing (virtual trading)
                 if let Ok(quantity) = self.trading_panel.quantity.parse::<f64>() {
                     let price = if self.trading_panel.order_mode == OrderMode::Market {
                         self.trading_panel.current_price
@@ -537,8 +537,8 @@ impl eframe::App for CryptoApp {
             
             ui.separator();
             
-            // 빠른 주문 버튼들
-            ui.label("⚡ 빠른 주문:");
+            // Quick order buttons
+            ui.label("⚡ Quick Order:");
             ui.horizontal(|ui| {
                 if ui.small_button("25%").clicked() {
                     match self.trading_panel.order_type {
@@ -590,7 +590,7 @@ impl eframe::App for CryptoApp {
             
             if self.is_loading {
                 ui.centered_and_justified(|ui| {
-                    ui.colored_label(egui::Color32::YELLOW, "데이터를 가져오는 중...");
+                    ui.colored_label(egui::Color32::YELLOW, "Loading data...");
                 });
                 return;
             }
@@ -598,7 +598,7 @@ impl eframe::App for CryptoApp {
             let data = self.candle_data.lock().unwrap();
             if data.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.colored_label(egui::Color32::RED, "데이터가 없습니다");
+                    ui.colored_label(egui::Color32::RED, "No data available");
                 });
                 return;
             }
@@ -656,7 +656,7 @@ impl eframe::App for CryptoApp {
                             .map(|candle| [candle.timestamp, candle.close])
                             .collect();
                         
-                        let price_line = Line::new("종가", price_points)
+                        let price_line = Line::new("Close Price", price_points)
                             .color(egui::Color32::from_rgb(100, 200, 255))
                             .width(2.0);
                         
@@ -681,7 +681,7 @@ impl eframe::App for CryptoApp {
                                 candle.high,
                             );
                             
-                            // 캔들 크기를 시간봉 간격에 맞게 조정
+                            // Adjust candle size based on timeframe interval
                             let actual_candle_width = candle_interval * candle_width * 0.8;
                             
                             let box_elem = BoxElem::new(candle.timestamp, box_spread)
@@ -693,7 +693,7 @@ impl eframe::App for CryptoApp {
                             box_elements.push(box_elem);
                         }
                         
-                        let candlestick_plot = BoxPlot::new("캔들스틱", box_elements);
+                        let candlestick_plot = BoxPlot::new("Candlestick", box_elements);
                         plot_ui.box_plot(candlestick_plot);
                     }
                 }
