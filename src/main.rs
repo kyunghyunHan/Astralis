@@ -171,6 +171,11 @@ struct CryptoApp {
     is_live_mode: bool,
     timeframe_changed: bool,
     trading_panel: TradingPanel,
+    show_ma20: bool,
+    show_bollinger: bool,
+    show_macd: bool,
+    show_rsi: bool,
+    show_volume: bool,
 }
 
 impl Default for CryptoApp {
@@ -195,6 +200,11 @@ impl Default for CryptoApp {
             is_live_mode: true,
             timeframe_changed: false,
             trading_panel: TradingPanel::default(),
+            show_ma20: true,
+            show_bollinger: false,
+            show_macd: true,
+            show_rsi: true,
+            show_volume: true,
         };
         
         // Start fetching data
@@ -304,6 +314,145 @@ async fn fetch_klines_latest(timeframe: &Timeframe) -> Result<Vec<CandleData>, B
     Ok(candles)
 }
 
+// Calculate 20-period Moving Average
+fn calculate_ma20(data: &[CandleData]) -> Vec<(f64, f64)> {
+    let mut ma_points = Vec::new();
+    
+    for i in 19..data.len() {
+        let sum: f64 = data[i-19..=i].iter().map(|candle| candle.close).sum();
+        let ma_value = sum / 20.0;
+        ma_points.push((data[i].timestamp, ma_value));
+    }
+    
+    ma_points
+}
+
+// Calculate Bollinger Bands (20-period, 2 standard deviations)
+fn calculate_bollinger_bands(data: &[CandleData]) -> (Vec<(f64, f64)>, Vec<(f64, f64)>, Vec<(f64, f64)>) {
+    let mut upper_band = Vec::new();
+    let mut middle_band = Vec::new();
+    let mut lower_band = Vec::new();
+    
+    for i in 19..data.len() {
+        let window = &data[i-19..=i];
+        let sum: f64 = window.iter().map(|candle| candle.close).sum();
+        let ma = sum / 20.0;
+        
+        // Calculate standard deviation
+        let variance: f64 = window.iter()
+            .map(|candle| {
+                let diff = candle.close - ma;
+                diff * diff
+            })
+            .sum::<f64>() / 20.0;
+        
+        let std_dev = variance.sqrt();
+        let upper = ma + (2.0 * std_dev);
+        let lower = ma - (2.0 * std_dev);
+        
+        let timestamp = data[i].timestamp;
+        upper_band.push((timestamp, upper));
+        middle_band.push((timestamp, ma));
+        lower_band.push((timestamp, lower));
+    }
+    
+    (upper_band, middle_band, lower_band)
+}
+
+// Calculate MACD (12, 26, 9)
+fn calculate_macd(data: &[CandleData]) -> (Vec<(f64, f64)>, Vec<(f64, f64)>, Vec<(f64, f64)>) {
+    if data.len() < 26 {
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+    
+    let mut ema12 = Vec::new();
+    let mut ema26 = Vec::new();
+    let mut macd_line = Vec::new();
+    let mut signal_line = Vec::new();
+    let mut histogram = Vec::new();
+    
+    // Calculate EMA12 and EMA26
+    let alpha12 = 2.0 / (12.0 + 1.0);
+    let alpha26 = 2.0 / (26.0 + 1.0);
+    
+    let mut ema12_value = data[0].close;
+    let mut ema26_value = data[0].close;
+    
+    for (i, candle) in data.iter().enumerate() {
+        if i == 0 {
+            ema12.push(candle.close);
+            ema26.push(candle.close);
+        } else {
+            ema12_value = alpha12 * candle.close + (1.0 - alpha12) * ema12_value;
+            ema26_value = alpha26 * candle.close + (1.0 - alpha26) * ema26_value;
+            ema12.push(ema12_value);
+            ema26.push(ema26_value);
+        }
+        
+        if i >= 25 {
+            let macd_value = ema12[i] - ema26[i];
+            macd_line.push((candle.timestamp, macd_value));
+        }
+    }
+    
+    // Calculate Signal line (9-period EMA of MACD)
+    if !macd_line.is_empty() {
+        let alpha9 = 2.0 / (9.0 + 1.0);
+        let mut signal_value = macd_line[0].1;
+        
+        for (i, (timestamp, macd_val)) in macd_line.iter().enumerate() {
+            if i == 0 {
+                signal_line.push((*timestamp, *macd_val));
+                signal_value = *macd_val;
+            } else {
+                signal_value = alpha9 * macd_val + (1.0 - alpha9) * signal_value;
+                signal_line.push((*timestamp, signal_value));
+            }
+            
+            if i >= 8 {
+                let hist_value = macd_val - signal_line[i].1;
+                histogram.push((*timestamp, hist_value));
+            }
+        }
+    }
+    
+    (macd_line, signal_line, histogram)
+}
+
+// Calculate RSI (14-period)
+fn calculate_rsi(data: &[CandleData]) -> Vec<(f64, f64)> {
+    if data.len() < 15 {
+        return Vec::new();
+    }
+    
+    let mut rsi_points = Vec::new();
+    let period = 14;
+    
+    for i in period..data.len() {
+        let mut gains = 0.0;
+        let mut losses = 0.0;
+        
+        for j in (i - period + 1)..=i {
+            let change = data[j].close - data[j - 1].close;
+            if change > 0.0 {
+                gains += change;
+            } else {
+                losses += change.abs();
+            }
+        }
+        
+        let avg_gain = gains / period as f64;
+        let avg_loss = losses / period as f64;
+        
+        let rs = if avg_loss != 0.0 { avg_gain / avg_loss } else { 100.0 };
+        let rsi = 100.0 - (100.0 / (1.0 + rs));
+        
+        rsi_points.push((data[i].timestamp, rsi));
+    }
+    
+    rsi_points
+}
+
 impl eframe::App for CryptoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Check for new data
@@ -394,11 +543,16 @@ impl eframe::App for CryptoApp {
                         ui.selectable_value(&mut self.chart_type, ChartType::Candlestick, "Candle");
                     });
                 
-                if self.chart_type == ChartType::Candlestick {
-                    ui.separator();
-                    ui.label("Candle Size:");
-                    ui.add(egui::Slider::new(&mut self.candle_width, 0.3..=3.0).text(""));
-                }
+                ui.separator();
+                
+                ui.label("Indicators:");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.show_ma20, "MA20");
+                    ui.checkbox(&mut self.show_bollinger, "Bollinger");
+                    ui.checkbox(&mut self.show_macd, "MACD");
+                    ui.checkbox(&mut self.show_rsi, "RSI");
+                    ui.checkbox(&mut self.show_volume, "Volume");
+                });
                 
                 ui.separator();
                 
@@ -610,97 +764,361 @@ impl eframe::App for CryptoApp {
             let candle_width = self.candle_width;
             let candle_interval = self.timeframe.get_candle_interval();
             
-            let plot = Plot::new("crypto_chart")
-                .view_aspect(1.8)
-                .allow_zoom([false, false])
-                .allow_drag([true, false])
-                .allow_scroll(false)
-                .auto_bounds(egui::Vec2b::new(false, true))
-                .default_x_bounds(view_window_start, view_window_start + window_size);
+            // Calculate available height for charts
+            let available_height = ui.available_height();
+            let mut total_charts = 1; // Main price chart
             
-            let plot_response = plot.show(ui, |plot_ui| {
-                if plot_ui.response().dragged() {
-                    let drag_delta = plot_ui.pointer_coordinate_drag_delta();
-                    if drag_delta.x.abs() > 0.1 {
-                        let proposed_start = view_window_start - drag_delta.x as f64;
-                        let proposed_end = proposed_start + window_size;
-                        
-                        if proposed_end <= latest_timestamp && proposed_start >= 0.0 {
-                            view_window_start = proposed_start;
-                            self.is_live_mode = false;
-                        } else if proposed_end > latest_timestamp {
-                            view_window_start = latest_timestamp - window_size;
-                            self.is_live_mode = true;
-                        } else if proposed_start < 0.0 {
-                            view_window_start = 0.0;
-                            self.is_live_mode = false;
+            if self.show_macd { total_charts += 1; }
+            if self.show_rsi { total_charts += 1; }
+            
+            // Distribute heights: main chart gets 70%, indicators share 30%
+            let main_chart_height = available_height * 0.7;
+            let indicator_height = if total_charts > 1 { 
+                (available_height * 0.3) / (total_charts - 1) as f32 
+            } else { 
+                0.0 
+            };
+            
+            // Main Price Chart
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(ui.available_width(), main_chart_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    let plot = Plot::new("price_chart")
+                        .view_aspect(3.0)
+                        .allow_zoom([false, false])
+                        .allow_drag([true, false])
+                        .allow_scroll(false)
+                        .auto_bounds(egui::Vec2b::new(false, true))
+                        .default_x_bounds(view_window_start, view_window_start + window_size);
+                    
+                    let plot_response = plot.show(ui, |plot_ui| {
+                        if plot_ui.response().dragged() {
+                            let drag_delta = plot_ui.pointer_coordinate_drag_delta();
+                            if drag_delta.x.abs() > 0.1 {
+                                let proposed_start = view_window_start - drag_delta.x as f64;
+                                let proposed_end = proposed_start + window_size;
+                                
+                                if proposed_end <= latest_timestamp && proposed_start >= 0.0 {
+                                    view_window_start = proposed_start;
+                                    self.is_live_mode = false;
+                                } else if proposed_end > latest_timestamp {
+                                    view_window_start = latest_timestamp - window_size;
+                                    self.is_live_mode = true;
+                                } else if proposed_start < 0.0 {
+                                    view_window_start = 0.0;
+                                    self.is_live_mode = false;
+                                }
+                            }
                         }
-                    }
-                }
-                
-                let window_end = view_window_start + window_size;
-                let filtered_data: Vec<_> = data
-                    .iter()
-                    .filter(|candle| {
-                        let margin = window_size * 0.1;
-                        candle.timestamp >= (view_window_start - margin) && 
-                        candle.timestamp <= (window_end + margin)
-                    })
-                    .cloned()
-                    .collect();
-                
-                match chart_type {
-                    ChartType::Line => {
-                        let price_points: PlotPoints = filtered_data
+                        
+                        let window_end = view_window_start + window_size;
+                        let filtered_data: Vec<_> = data
                             .iter()
-                            .map(|candle| [candle.timestamp, candle.close])
+                            .filter(|candle| {
+                                let margin = window_size * 0.1;
+                                candle.timestamp >= (view_window_start - margin) && 
+                                candle.timestamp <= (window_end + margin)
+                            })
+                            .cloned()
                             .collect();
                         
-                        let price_line = Line::new("Close Price", price_points)
-                            .color(egui::Color32::from_rgb(100, 200, 255))
-                            .width(2.0);
-                        
-                        plot_ui.line(price_line);
-                    },
-                    ChartType::Candlestick => {
-                        let mut box_elements = Vec::new();
-                        
-                        for candle in &filtered_data {
-                            let is_bullish = candle.close >= candle.open;
-                            let color = if is_bullish {
-                                egui::Color32::from_rgb(0, 255, 150)
-                            } else {
-                                egui::Color32::from_rgb(255, 80, 80)
-                            };
-                            
-                            let box_spread = BoxSpread::new(
-                                candle.low,
-                                candle.open.min(candle.close),
-                                (candle.open + candle.close) / 2.0,
-                                candle.open.max(candle.close),
-                                candle.high,
-                            );
-                            
-                            // Adjust candle size based on timeframe interval
-                            let actual_candle_width = candle_interval * candle_width * 0.8;
-                            
-                            let box_elem = BoxElem::new(candle.timestamp, box_spread)
-                                .whisker_width(actual_candle_width * 0.1)
-                                .box_width(actual_candle_width)
-                                .fill(color)
-                                .stroke(egui::Stroke::new(1.5, color));
-                            
-                            box_elements.push(box_elem);
+                        match chart_type {
+                            ChartType::Line => {
+                                let price_points: PlotPoints = filtered_data
+                                    .iter()
+                                    .map(|candle| [candle.timestamp, candle.close])
+                                    .collect();
+                                
+                                let price_line = Line::new("Close Price", price_points)
+                                    .color(egui::Color32::from_rgb(100, 200, 255))
+                                    .width(2.0);
+                                
+                                plot_ui.line(price_line);
+                            },
+                            ChartType::Candlestick => {
+                                let mut box_elements = Vec::new();
+                                
+                                for candle in &filtered_data {
+                                    let is_bullish = candle.close >= candle.open;
+                                    let color = if is_bullish {
+                                        egui::Color32::from_rgb(0, 255, 150)
+                                    } else {
+                                        egui::Color32::from_rgb(255, 80, 80)
+                                    };
+                                    
+                                    let box_spread = BoxSpread::new(
+                                        candle.low,
+                                        candle.open.min(candle.close),
+                                        (candle.open + candle.close) / 2.0,
+                                        candle.open.max(candle.close),
+                                        candle.high,
+                                    );
+                                    
+                                    let actual_candle_width = candle_interval * candle_width * 0.8;
+                                    
+                                    let box_elem = BoxElem::new(candle.timestamp, box_spread)
+                                        .whisker_width(actual_candle_width * 0.1)
+                                        .box_width(actual_candle_width)
+                                        .fill(color)
+                                        .stroke(egui::Stroke::new(1.5, color));
+                                    
+                                    box_elements.push(box_elem);
+                                }
+                                
+                                let candlestick_plot = BoxPlot::new("Candlestick", box_elements);
+                                plot_ui.box_plot(candlestick_plot);
+                            }
                         }
                         
-                        let candlestick_plot = BoxPlot::new("Candlestick", box_elements);
-                        plot_ui.box_plot(candlestick_plot);
-                    }
+                        // Add Bollinger Bands
+                        if self.show_bollinger && filtered_data.len() >= 20 {
+                            let (upper_band, middle_band, lower_band) = calculate_bollinger_bands(&filtered_data);
+                            
+                            if !upper_band.is_empty() {
+                                let upper_points: PlotPoints = upper_band.iter().map(|(t, v)| [*t, *v]).collect();
+                                let upper_line = Line::new("BB Upper", upper_points)
+                                    .color(egui::Color32::from_rgb(128, 128, 128))
+                                    .width(1.5);
+                                plot_ui.line(upper_line);
+                                
+                                let lower_points: PlotPoints = lower_band.iter().map(|(t, v)| [*t, *v]).collect();
+                                let lower_line = Line::new("BB Lower", lower_points)
+                                    .color(egui::Color32::from_rgb(128, 128, 128))
+                                    .width(1.5);
+                                plot_ui.line(lower_line);
+                                
+                                if !self.show_ma20 {
+                                    let middle_points: PlotPoints = middle_band.iter().map(|(t, v)| [*t, *v]).collect();
+                                    let middle_line = Line::new("BB Middle", middle_points)
+                                        .color(egui::Color32::from_rgb(255, 215, 0))
+                                        .width(1.5);
+                                    plot_ui.line(middle_line);
+                                }
+                            }
+                        }
+                        
+                        // Add MA20 line
+                        if self.show_ma20 && filtered_data.len() >= 20 {
+                            let ma20_points = calculate_ma20(&filtered_data);
+                            if !ma20_points.is_empty() {
+                                let ma20_plot_points: PlotPoints = ma20_points
+                                    .iter()
+                                    .map(|(timestamp, ma_value)| [*timestamp, *ma_value])
+                                    .collect();
+                                
+                                let ma20_line = Line::new("MA20", ma20_plot_points)
+                                    .color(egui::Color32::from_rgb(255, 215, 0))
+                                    .width(2.5);
+                                
+                                plot_ui.line(ma20_line);
+                            }
+                        }
+                    });
+                    
+                    self.is_dragging = plot_response.response.dragged();
+                    self.view_window_start = view_window_start;
                 }
-            });
+            );
             
-            self.is_dragging = plot_response.response.dragged();
-            self.view_window_start = view_window_start;
+            // Volume overlay on price chart (if enabled)
+            if self.show_volume {
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(ui.available_width(), main_chart_height * 0.25), // Volume takes bottom 25% of price chart
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0; // Remove spacing
+                        ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                        
+                        let volume_plot = Plot::new("volume_overlay")
+                            .allow_zoom([false, false])
+                            .allow_drag([true, false])
+                            .allow_scroll(false)
+                            .auto_bounds(egui::Vec2b::new(false, true))
+                            .default_x_bounds(view_window_start, view_window_start + window_size)
+                            .show_background(false)
+                            .show_axes([false, true]); // Only show Y axis
+                        
+                        volume_plot.show(ui, |plot_ui| {
+                            let window_end = view_window_start + window_size;
+                            let filtered_data: Vec<_> = data
+                                .iter()
+                                .filter(|candle| {
+                                    let margin = window_size * 0.1;
+                                    candle.timestamp >= (view_window_start - margin) && 
+                                    candle.timestamp <= (window_end + margin)
+                                })
+                                .cloned()
+                                .collect();
+                            
+                            let mut volume_bars = Vec::new();
+                            for candle in &filtered_data {
+                                let color = if candle.close >= candle.open {
+                                    egui::Color32::from_rgba_unmultiplied(0, 200, 100, 100) // Semi-transparent green
+                                } else {
+                                    egui::Color32::from_rgba_unmultiplied(255, 100, 100, 100) // Semi-transparent red
+                                };
+                                
+                                let actual_candle_width = candle_interval * candle_width * 0.8;
+                                let box_spread = BoxSpread::new(0.0, 0.0, candle.volume / 2.0, candle.volume, candle.volume);
+                                let box_elem = BoxElem::new(candle.timestamp, box_spread)
+                                    .box_width(actual_candle_width)
+                                    .fill(color)
+                                    .stroke(egui::Stroke::new(0.5, color));
+                                
+                                volume_bars.push(box_elem);
+                            }
+                            
+                            let volume_plot = BoxPlot::new("Volume", volume_bars);
+                            plot_ui.box_plot(volume_plot);
+                        });
+                    }
+                );
+            }
+            
+            
+            // MACD Chart
+            if self.show_macd {
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(ui.available_width(), indicator_height),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        ui.label("📈 MACD");
+                        let macd_plot = Plot::new("macd_chart")
+                            .allow_zoom([false, false])
+                            .allow_drag([true, false])
+                            .allow_scroll(false)
+                            .auto_bounds(egui::Vec2b::new(false, true))
+                            .default_x_bounds(view_window_start, view_window_start + window_size);
+                        
+                        macd_plot.show(ui, |plot_ui| {
+                            let window_end = view_window_start + window_size;
+                            let filtered_data: Vec<_> = data
+                                .iter()
+                                .filter(|candle| {
+                                    let margin = window_size * 0.1;
+                                    candle.timestamp >= (view_window_start - margin) && 
+                                    candle.timestamp <= (window_end + margin)
+                                })
+                                .cloned()
+                                .collect();
+                            
+                            if filtered_data.len() >= 35 { // Increased minimum data requirement
+                                let (macd_line, signal_line, histogram) = calculate_macd(&filtered_data);
+                                
+                                // MACD Line
+                                if !macd_line.is_empty() {
+                                    let macd_points: PlotPoints = macd_line.iter().map(|(t, v)| [*t, *v]).collect();
+                                    let macd = Line::new("MACD", macd_points)
+                                        .color(egui::Color32::from_rgb(0, 150, 255))
+                                        .width(2.0);
+                                    plot_ui.line(macd);
+                                }
+                                
+                                // Signal Line
+                                if !signal_line.is_empty() {
+                                    let signal_points: PlotPoints = signal_line.iter().map(|(t, v)| [*t, *v]).collect();
+                                    let signal = Line::new("Signal", signal_points)
+                                        .color(egui::Color32::from_rgb(255, 150, 0))
+                                        .width(2.0);
+                                    plot_ui.line(signal);
+                                }
+                                
+                                // Histogram
+                                if !histogram.is_empty() {
+                                    let mut hist_bars = Vec::new();
+                                    for (timestamp, value) in &histogram {
+                                        let color = if *value >= 0.0 {
+                                            egui::Color32::from_rgb(0, 200, 100)
+                                        } else {
+                                            egui::Color32::from_rgb(255, 100, 100)
+                                        };
+                                        
+                                        let actual_width = candle_interval * 0.5;
+                                        let box_spread = if *value >= 0.0 {
+                                            BoxSpread::new(0.0, 0.0, value / 2.0, *value, *value)
+                                        } else {
+                                            BoxSpread::new(*value, *value, value / 2.0, 0.0, 0.0)
+                                        };
+                                        
+                                        let box_elem = BoxElem::new(*timestamp, box_spread)
+                                            .box_width(actual_width)
+                                            .fill(color)
+                                            .stroke(egui::Stroke::new(1.0, color));
+                                        
+                                        hist_bars.push(box_elem);
+                                    }
+                                    
+                                    let hist_plot = BoxPlot::new("MACD Histogram", hist_bars);
+                                    plot_ui.box_plot(hist_plot);
+                                }
+                            }
+                        });
+                    }
+                );
+            }
+            
+            // RSI Chart
+            if self.show_rsi {
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(ui.available_width(), indicator_height),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        ui.label("⚡ RSI");
+                        let rsi_plot = Plot::new("rsi_chart")
+                            .allow_zoom([false, false])
+                            .allow_drag([true, false])
+                            .allow_scroll(false)
+                            .auto_bounds(egui::Vec2b::new(false, false))
+                            .default_x_bounds(view_window_start, view_window_start + window_size)
+                            .default_y_bounds(0.0, 100.0);
+                        
+                        rsi_plot.show(ui, |plot_ui| {
+                            let window_end = view_window_start + window_size;
+                            let filtered_data: Vec<_> = data
+                                .iter()
+                                .filter(|candle| {
+                                    let margin = window_size * 0.1;
+                                    candle.timestamp >= (view_window_start - margin) && 
+                                    candle.timestamp <= (window_end + margin)
+                                })
+                                .cloned()
+                                .collect();
+                            
+                            if filtered_data.len() >= 15 {
+                                let rsi_points = calculate_rsi(&filtered_data);
+                                
+                                if !rsi_points.is_empty() {
+                                    let rsi_plot_points: PlotPoints = rsi_points.iter().map(|(t, v)| [*t, *v]).collect();
+                                    let rsi_line = Line::new("RSI", rsi_plot_points)
+                                        .color(egui::Color32::from_rgb(255, 100, 255))
+                                        .width(2.0);
+                                    plot_ui.line(rsi_line);
+                                    
+                                    // Add RSI reference lines
+                                    let overbought: PlotPoints = vec![[view_window_start, 70.0], [view_window_start + window_size, 70.0]].into();
+                                    let oversold: PlotPoints = vec![[view_window_start, 30.0], [view_window_start + window_size, 30.0]].into();
+                                    let middle: PlotPoints = vec![[view_window_start, 50.0], [view_window_start + window_size, 50.0]].into();
+                                    
+                                    let overbought_line = Line::new("Overbought", overbought)
+                                        .color(egui::Color32::from_rgb(255, 100, 100))
+                                        .width(1.0);
+                                    let oversold_line = Line::new("Oversold", oversold)
+                                        .color(egui::Color32::from_rgb(100, 255, 100))
+                                        .width(1.0);
+                                    let middle_line = Line::new("Middle", middle)
+                                        .color(egui::Color32::from_rgb(128, 128, 128))
+                                        .width(1.0);
+                                    
+                                    plot_ui.line(overbought_line);
+                                    plot_ui.line(oversold_line);
+                                    plot_ui.line(middle_line);
+                                }
+                            }
+                        });
+                    }
+                );
+            }
         });
         
         // Repaint every second for live updates
