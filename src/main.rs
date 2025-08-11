@@ -10,13 +10,13 @@ use std::sync::{Arc, Mutex};
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_title("Crypto Chart"),
+            .with_inner_size([1600.0, 900.0])  // 더 큰 창 크기
+            .with_title("Crypto Trading Chart"),
         ..Default::default()
     };
     
     eframe::run_native(
-        "Crypto Chart",
+        "Crypto Trading Chart",
         options,
         Box::new(|_cc| Ok(Box::<CryptoApp>::default())),
     )
@@ -88,17 +88,70 @@ impl Timeframe {
     
     fn get_window_size(&self) -> f64 {
         match self {
-            Timeframe::M1 => 60.0 * 100.0,      // 100분 = 1.67시간
-            Timeframe::M3 => 60.0 * 300.0,      // 300분 = 5시간
-            Timeframe::M5 => 60.0 * 500.0,      // 500분 = 8.33시간
-            Timeframe::M15 => 60.0 * 1500.0,    // 1500분 = 25시간
-            Timeframe::M30 => 60.0 * 3000.0,    // 3000분 = 50시간
+            Timeframe::M1 => 60.0 * 100.0,      // 100분
+            Timeframe::M3 => 60.0 * 300.0,      // 300분
+            Timeframe::M5 => 60.0 * 500.0,      // 500분
+            Timeframe::M15 => 60.0 * 1500.0,    // 1500분
+            Timeframe::M30 => 60.0 * 3000.0,    // 3000분
             Timeframe::H1 => 60.0 * 60.0 * 100.0,   // 100시간
             Timeframe::H4 => 60.0 * 60.0 * 400.0,   // 400시간
-            Timeframe::H12 => 60.0 * 60.0 * 1200.0, // 1200시간 = 50일
+            Timeframe::H12 => 60.0 * 60.0 * 1200.0, // 1200시간
             Timeframe::D1 => 60.0 * 60.0 * 24.0 * 100.0, // 100일
             Timeframe::W1 => 60.0 * 60.0 * 24.0 * 7.0 * 50.0, // 50주
             Timeframe::MN1 => 60.0 * 60.0 * 24.0 * 30.0 * 12.0, // 12개월
+        }
+    }
+    
+    // 캔들 간격 계산 (초 단위)
+    fn get_candle_interval(&self) -> f64 {
+        match self {
+            Timeframe::M1 => 60.0,           // 1분
+            Timeframe::M3 => 180.0,          // 3분
+            Timeframe::M5 => 300.0,          // 5분
+            Timeframe::M15 => 900.0,         // 15분
+            Timeframe::M30 => 1800.0,        // 30분
+            Timeframe::H1 => 3600.0,         // 1시간
+            Timeframe::H4 => 14400.0,        // 4시간
+            Timeframe::H12 => 43200.0,       // 12시간
+            Timeframe::D1 => 86400.0,        // 1일
+            Timeframe::W1 => 604800.0,       // 1주
+            Timeframe::MN1 => 2592000.0,     // 1개월 (30일)
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+enum OrderType {
+    Buy,
+    Sell,
+}
+
+#[derive(Clone, PartialEq)]
+enum OrderMode {
+    Market,
+    Limit,
+}
+
+struct TradingPanel {
+    order_type: OrderType,
+    order_mode: OrderMode,
+    quantity: String,
+    price: String,
+    current_price: f64,
+    balance_usdt: f64,
+    balance_btc: f64,
+}
+
+impl Default for TradingPanel {
+    fn default() -> Self {
+        Self {
+            order_type: OrderType::Buy,
+            order_mode: OrderMode::Market,
+            quantity: "0.001".to_string(),
+            price: "0.0".to_string(),
+            current_price: 0.0,
+            balance_usdt: 10000.0,  // 가상 잔고
+            balance_btc: 0.0,
         }
     }
 }
@@ -117,6 +170,7 @@ struct CryptoApp {
     is_dragging: bool,
     is_live_mode: bool,
     timeframe_changed: bool,
+    trading_panel: TradingPanel,
 }
 
 impl Default for CryptoApp {
@@ -140,6 +194,7 @@ impl Default for CryptoApp {
             is_dragging: false,
             is_live_mode: true,
             timeframe_changed: false,
+            trading_panel: TradingPanel::default(),
         };
         
         // Start fetching data
@@ -159,26 +214,12 @@ async fn fetch_binance_data(
     timeframe: Timeframe,
 ) {
     loop {
-        // 현재 데이터 범위 확인
-        let (_current_start, _current_end) = if let Ok(data) = candle_data.lock() {
-            if let (Some(first), Some(last)) = (data.front(), data.back()) {
-                (first.timestamp, last.timestamp)
-            } else {
-                (0.0, 0.0)
-            }
-        } else {
-            (0.0, 0.0)
-        };
-        
-        // 최신 500개 데이터만 업데이트 (실시간 업데이트용)
         match fetch_klines_latest(&timeframe).await {
             Ok(candles) => {
                 if let Ok(mut data) = candle_data.lock() {
                     if data.is_empty() {
-                        // 처음 로딩일 때만 전체 데이터 추가
                         data.extend(candles.iter().cloned());
                     } else {
-                        // 기존 데이터가 있으면 최신 부분만 업데이트
                         let latest_existing_time = data.back().map(|d| d.timestamp).unwrap_or(0.0);
                         
                         for new_candle in &candles {
@@ -190,14 +231,12 @@ async fn fetch_binance_data(
                             }
                         }
                         
-                        // 메모리 관리: 너무 많은 데이터 제거 (최대 10000개 유지)
                         while data.len() > 10000 {
                             data.pop_front();
                         }
                     }
                 }
                 
-                // Send to UI
                 if tx.send(candles).is_err() {
                     break;
                 }
@@ -207,12 +246,11 @@ async fn fetch_binance_data(
             }
         }
         
-        // 시간봉에 따라 업데이트 주기 조정
         let update_interval = match timeframe {
-            Timeframe::M1 | Timeframe::M3 | Timeframe::M5 => 5,  // 5초
-            Timeframe::M15 | Timeframe::M30 => 30,               // 30초
-            Timeframe::H1 | Timeframe::H4 => 60,                 // 1분
-            _ => 300,                                            // 5분
+            Timeframe::M1 | Timeframe::M3 | Timeframe::M5 => 5,
+            Timeframe::M15 | Timeframe::M30 => 30,
+            Timeframe::H1 | Timeframe::H4 => 60,
+            _ => 300,
         };
         
         tokio::time::sleep(tokio::time::Duration::from_secs(update_interval)).await;
@@ -266,89 +304,32 @@ async fn fetch_klines_latest(timeframe: &Timeframe) -> Result<Vec<CandleData>, B
     Ok(candles)
 }
 
-async fn fetch_klines_for_range(
-    start_time: f64, 
-    end_time: f64,
-    timeframe: &Timeframe,
-) -> Result<Vec<CandleData>, Box<dyn std::error::Error>> {
-    let start_ms = (start_time * 1000.0) as i64;
-    let end_ms = (end_time * 1000.0) as i64;
-    
-    let url = format!(
-        "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval={}&startTime={}&endTime={}&limit=1000",
-        timeframe.to_api_string(), start_ms, end_ms
-    );
-    
-    let client = reqwest::Client::new();
-    let response = client.get(&url).send().await?;
-    
-    if !response.status().is_success() {
-        return Err(format!("API error: {}", response.status()).into());
-    }
-    
-    let text = response.text().await?;
-    let json: serde_json::Value = serde_json::from_str(&text)?;
-    
-    let mut candles = Vec::new();
-    
-    if let Some(array) = json.as_array() {
-        for item in array {
-            if let Some(kline_array) = item.as_array() {
-                if kline_array.len() >= 11 {
-                    let timestamp = kline_array[0].as_i64().unwrap_or(0) as f64;
-                    let open = kline_array[1].as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0);
-                    let high = kline_array[2].as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0);
-                    let low = kline_array[3].as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0);
-                    let close = kline_array[4].as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0);
-                    let volume = kline_array[5].as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0);
-                    
-                    if open > 0.0 && high > 0.0 && low > 0.0 && close > 0.0 {
-                        candles.push(CandleData {
-                            timestamp: timestamp / 1000.0,
-                            open,
-                            high,
-                            low,
-                            close,
-                            volume,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    
-    Ok(candles)
-}
-
 impl eframe::App for CryptoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Check for new data - only when not dragging
+        // Check for new data
         if !self.is_dragging {
             if let Some(receiver) = &mut self.data_receiver {
                 while let Ok(new_candles) = receiver.try_recv() {
                     if !new_candles.is_empty() {
                         self.is_loading = false;
                         
-                        let old_latest = self.latest_timestamp;
-                        
-                        // Update latest timestamp
                         if let Some(latest) = new_candles.last() {
                             self.latest_timestamp = latest.timestamp;
+                            self.trading_panel.current_price = latest.close;
                             
                             if self.view_window_start == 0.0 {
                                 self.view_window_start = self.latest_timestamp - self.window_size;
                                 self.is_live_mode = true;
                             } else if self.is_live_mode {
-                                // 라이브 모드일 때: 최신 데이터가 윈도우 오른쪽 끝에서 약간 안쪽에 오도록
                                 let buffer = match self.timeframe {
-                                    Timeframe::M1 => 60.0 * 5.0,     // 5분 버퍼
-                                    Timeframe::M3 => 60.0 * 15.0,    // 15분 버퍼
-                                    Timeframe::M5 => 60.0 * 25.0,    // 25분 버퍼
-                                    Timeframe::M15 => 60.0 * 75.0,   // 75분 버퍼
-                                    Timeframe::M30 => 60.0 * 150.0,  // 150분 버퍼
-                                    Timeframe::H1 => 60.0 * 60.0 * 5.0, // 5시간 버퍼
-                                    Timeframe::H4 => 60.0 * 60.0 * 20.0, // 20시간 버퍼
-                                    _ => 60.0 * 60.0 * 24.0 * 5.0,   // 5일 버퍼
+                                    Timeframe::M1 => 60.0 * 5.0,
+                                    Timeframe::M3 => 60.0 * 15.0,
+                                    Timeframe::M5 => 60.0 * 25.0,
+                                    Timeframe::M15 => 60.0 * 75.0,
+                                    Timeframe::M30 => 60.0 * 150.0,
+                                    Timeframe::H1 => 60.0 * 60.0 * 5.0,
+                                    Timeframe::H4 => 60.0 * 60.0 * 20.0,
+                                    _ => 60.0 * 60.0 * 24.0 * 5.0,
                                 };
                                 self.view_window_start = self.latest_timestamp + buffer - self.window_size;
                             }
@@ -358,10 +339,9 @@ impl eframe::App for CryptoApp {
             }
         }
         
-        // Simple top controls
+        // Top controls
         egui::TopBottomPanel::top("control_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // 시간봉 선택
                 ui.label("시간봉:");
                 let old_timeframe = self.timeframe.clone();
                 egui::ComboBox::from_id_salt("timeframe")
@@ -380,18 +360,14 @@ impl eframe::App for CryptoApp {
                         ui.selectable_value(&mut self.timeframe, Timeframe::MN1, "월봉");
                     });
                 
-                // 시간봉이 변경되었는지 확인
                 if old_timeframe != self.timeframe {
-                    self.timeframe_changed = true;
                     self.window_size = self.timeframe.get_window_size();
                     self.is_loading = true;
                     
-                    // 데이터 초기화
                     if let Ok(mut data) = self.candle_data.lock() {
                         data.clear();
                     }
                     
-                    // 새로운 시간봉으로 데이터 가져오기
                     if let Some(rt) = &self.runtime {
                         let (tx, rx) = mpsc::unbounded_channel();
                         self.data_receiver = Some(rx);
@@ -401,34 +377,32 @@ impl eframe::App for CryptoApp {
                         rt.spawn(fetch_binance_data(tx, candle_data_clone, timeframe_clone));
                     }
                     
-                    // 뷰 리셋
                     self.view_window_start = 0.0;
                     self.is_live_mode = true;
                 }
                 
                 ui.separator();
                 
-                ui.label("차트 타입:");
+                ui.label("차트:");
                 egui::ComboBox::from_id_salt("chart_type")
                     .selected_text(match self.chart_type {
                         ChartType::Line => "라인",
-                        ChartType::Candlestick => "캔들스틱",
+                        ChartType::Candlestick => "캔들",
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.chart_type, ChartType::Line, "라인");
-                        ui.selectable_value(&mut self.chart_type, ChartType::Candlestick, "캔들스틱");
+                        ui.selectable_value(&mut self.chart_type, ChartType::Candlestick, "캔들");
                     });
                 
                 if self.chart_type == ChartType::Candlestick {
                     ui.separator();
-                    ui.label("캔들 너비:");
-                    ui.add(egui::Slider::new(&mut self.candle_width, 0.1..=2.0).text(""));
+                    ui.label("캔들 크기:");
+                    ui.add(egui::Slider::new(&mut self.candle_width, 0.3..=3.0).text(""));
                 }
                 
                 ui.separator();
                 
                 if ui.button("라이브").clicked() {
-                    // 라이브 모드로 전환
                     let buffer = match self.timeframe {
                         Timeframe::M1 => 60.0 * 5.0,
                         Timeframe::M3 => 60.0 * 15.0,
@@ -445,6 +419,10 @@ impl eframe::App for CryptoApp {
                 
                 ui.separator();
                 
+                if !self.trading_panel.current_price.is_nan() && self.trading_panel.current_price > 0.0 {
+                    ui.colored_label(egui::Color32::WHITE, format!("현재가: ${:.2}", self.trading_panel.current_price));
+                }
+                
                 if self.is_loading {
                     ui.colored_label(egui::Color32::YELLOW, "로딩중...");
                 } else {
@@ -453,28 +431,162 @@ impl eframe::App for CryptoApp {
                     } else {
                         ui.colored_label(egui::Color32::LIGHT_BLUE, "📜 히스토리");
                     }
-                    ui.separator();
-                    
-                    let window_end = self.view_window_start + self.window_size;
-                    let is_at_edge = (window_end - self.latest_timestamp).abs() < 60.0;
-                    ui.label(format!("윈도우: {} ~ {}", 
-                        chrono::DateTime::from_timestamp(self.view_window_start as i64, 0)
-                            .map(|dt| dt.format("%H:%M").to_string())
-                            .unwrap_or("--:--".to_string()),
-                        chrono::DateTime::from_timestamp(window_end as i64, 0)
-                            .map(|dt| dt.format("%H:%M").to_string())
-                            .unwrap_or("--:--".to_string())
-                    ));
-                    ui.label(format!("최신 데이터: {}", if is_at_edge { "✅" } else { "❌" }));
-                    let data_count = if let Ok(data) = self.candle_data.lock() { data.len() } else { 0 };
-                    ui.label(format!("데이터: {}개", data_count));
                 }
             });
         });
         
-        // Main chart area
+        // Main layout with side panel for trading
+        egui::SidePanel::right("trading_panel").min_width(300.0).show(ctx, |ui| {
+            ui.heading("💰 매매");
+            ui.separator();
+            
+            // 잔고 표시
+            ui.group(|ui| {
+                ui.label("💳 잔고");
+                ui.label(format!("USDT: ${:.2}", self.trading_panel.balance_usdt));
+                ui.label(format!("BTC: {:.6}", self.trading_panel.balance_btc));
+            });
+            
+            ui.separator();
+            
+            // 주문 타입
+            ui.horizontal(|ui| {
+                ui.label("주문:");
+                ui.selectable_value(&mut self.trading_panel.order_type, OrderType::Buy, "🟢 매수");
+                ui.selectable_value(&mut self.trading_panel.order_type, OrderType::Sell, "🔴 매도");
+            });
+            
+            // 주문 방식
+            ui.horizontal(|ui| {
+                ui.label("방식:");
+                ui.selectable_value(&mut self.trading_panel.order_mode, OrderMode::Market, "시장가");
+                ui.selectable_value(&mut self.trading_panel.order_mode, OrderMode::Limit, "지정가");
+            });
+            
+            ui.separator();
+            
+            // 수량 입력
+            ui.horizontal(|ui| {
+                ui.label("수량:");
+                ui.text_edit_singleline(&mut self.trading_panel.quantity);
+                ui.label("BTC");
+            });
+            
+            // 가격 입력 (지정가일 때만)
+            if self.trading_panel.order_mode == OrderMode::Limit {
+                ui.horizontal(|ui| {
+                    ui.label("가격:");
+                    ui.text_edit_singleline(&mut self.trading_panel.price);
+                    ui.label("USDT");
+                });
+            } else {
+                // 시장가일 때 현재가 표시
+                if !self.trading_panel.current_price.is_nan() && self.trading_panel.current_price > 0.0 {
+                    ui.horizontal(|ui| {
+                        ui.label("예상가:");
+                        ui.colored_label(egui::Color32::YELLOW, format!("${:.2}", self.trading_panel.current_price));
+                    });
+                }
+            }
+            
+            ui.separator();
+            
+            // 주문 버튼
+            let button_color = match self.trading_panel.order_type {
+                OrderType::Buy => egui::Color32::from_rgb(0, 200, 100),
+                OrderType::Sell => egui::Color32::from_rgb(255, 100, 100),
+            };
+            
+            let button_text = match (&self.trading_panel.order_type, &self.trading_panel.order_mode) {
+                (OrderType::Buy, OrderMode::Market) => "시장가 매수",
+                (OrderType::Buy, OrderMode::Limit) => "지정가 매수",
+                (OrderType::Sell, OrderMode::Market) => "시장가 매도",
+                (OrderType::Sell, OrderMode::Limit) => "지정가 매도",
+            };
+            
+            if ui.add_sized([ui.available_width(), 40.0], 
+                egui::Button::new(button_text).fill(button_color)
+            ).clicked() {
+                // 주문 처리 (여기서는 가상 처리)
+                if let Ok(quantity) = self.trading_panel.quantity.parse::<f64>() {
+                    let price = if self.trading_panel.order_mode == OrderMode::Market {
+                        self.trading_panel.current_price
+                    } else {
+                        self.trading_panel.price.parse::<f64>().unwrap_or(0.0)
+                    };
+                    
+                    if price > 0.0 && quantity > 0.0 {
+                        match self.trading_panel.order_type {
+                            OrderType::Buy => {
+                                let total_cost = price * quantity;
+                                if total_cost <= self.trading_panel.balance_usdt {
+                                    self.trading_panel.balance_usdt -= total_cost;
+                                    self.trading_panel.balance_btc += quantity;
+                                }
+                            },
+                            OrderType::Sell => {
+                                if quantity <= self.trading_panel.balance_btc {
+                                    self.trading_panel.balance_btc -= quantity;
+                                    self.trading_panel.balance_usdt += price * quantity;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            ui.separator();
+            
+            // 빠른 주문 버튼들
+            ui.label("⚡ 빠른 주문:");
+            ui.horizontal(|ui| {
+                if ui.small_button("25%").clicked() {
+                    match self.trading_panel.order_type {
+                        OrderType::Buy => {
+                            if self.trading_panel.current_price > 0.0 {
+                                let amount = (self.trading_panel.balance_usdt * 0.25) / self.trading_panel.current_price;
+                                self.trading_panel.quantity = format!("{:.6}", amount);
+                            }
+                        },
+                        OrderType::Sell => {
+                            let amount = self.trading_panel.balance_btc * 0.25;
+                            self.trading_panel.quantity = format!("{:.6}", amount);
+                        }
+                    }
+                }
+                if ui.small_button("50%").clicked() {
+                    match self.trading_panel.order_type {
+                        OrderType::Buy => {
+                            if self.trading_panel.current_price > 0.0 {
+                                let amount = (self.trading_panel.balance_usdt * 0.5) / self.trading_panel.current_price;
+                                self.trading_panel.quantity = format!("{:.6}", amount);
+                            }
+                        },
+                        OrderType::Sell => {
+                            let amount = self.trading_panel.balance_btc * 0.5;
+                            self.trading_panel.quantity = format!("{:.6}", amount);
+                        }
+                    }
+                }
+                if ui.small_button("100%").clicked() {
+                    match self.trading_panel.order_type {
+                        OrderType::Buy => {
+                            if self.trading_panel.current_price > 0.0 {
+                                let amount = self.trading_panel.balance_usdt / self.trading_panel.current_price;
+                                self.trading_panel.quantity = format!("{:.6}", amount);
+                            }
+                        },
+                        OrderType::Sell => {
+                            self.trading_panel.quantity = format!("{:.6}", self.trading_panel.balance_btc);
+                        }
+                    }
+                }
+            });
+        });
+        
+        // Chart area (now takes remaining space)
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading(format!("BTC/USDT 차트 ({})", self.timeframe.to_display_string()));
+            ui.heading(format!("📊 BTC/USDT ({})", self.timeframe.to_display_string()));
             
             if self.is_loading {
                 ui.centered_and_justified(|ui| {
@@ -496,9 +608,10 @@ impl eframe::App for CryptoApp {
             let latest_timestamp = self.latest_timestamp;
             let chart_type = self.chart_type.clone();
             let candle_width = self.candle_width;
+            let candle_interval = self.timeframe.get_candle_interval();
             
             let plot = Plot::new("crypto_chart")
-                .view_aspect(2.0)
+                .view_aspect(1.8)
                 .allow_zoom([false, false])
                 .allow_drag([true, false])
                 .allow_scroll(false)
@@ -568,11 +681,14 @@ impl eframe::App for CryptoApp {
                                 candle.high,
                             );
                             
+                            // 캔들 크기를 시간봉 간격에 맞게 조정
+                            let actual_candle_width = candle_interval * candle_width * 0.8;
+                            
                             let box_elem = BoxElem::new(candle.timestamp, box_spread)
-                                .whisker_width(0.1)
-                                .box_width(candle_width)
+                                .whisker_width(actual_candle_width * 0.1)
+                                .box_width(actual_candle_width)
                                 .fill(color)
-                                .stroke(egui::Stroke::new(1.0, color));
+                                .stroke(egui::Stroke::new(1.5, color));
                             
                             box_elements.push(box_elem);
                         }
@@ -584,45 +700,10 @@ impl eframe::App for CryptoApp {
             });
             
             self.is_dragging = plot_response.response.dragged();
-            
-            if plot_response.response.drag_stopped() {
-                let window_end = self.view_window_start + self.window_size;
-                let margin = self.window_size * 0.1;
-                let fetch_start = self.view_window_start - margin;
-                let fetch_end = window_end + margin;
-                
-                if let Some(rt) = &self.runtime {
-                    let candle_data_clone = self.candle_data.clone();
-                    let timeframe_clone = self.timeframe.clone();
-                    
-                    rt.spawn(async move {
-                        match fetch_klines_for_range(fetch_start, fetch_end, &timeframe_clone).await {
-                            Ok(new_candles) => {
-                                if let Ok(mut data) = candle_data_clone.lock() {
-                                    for new_candle in new_candles {
-                                        if !data.iter().any(|existing| 
-                                            (existing.timestamp - new_candle.timestamp).abs() < 1.0) {
-                                            data.push_back(new_candle);
-                                        }
-                                    }
-                                    
-                                    let mut sorted_data: Vec<_> = data.drain(..).collect();
-                                    sorted_data.sort_by(|a, b| a.timestamp.partial_cmp(&b.timestamp).unwrap());
-                                    data.extend(sorted_data);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("데이터 가져오기 실패: {}", e);
-                            }
-                        }
-                    });
-                }
-            }
-            
             self.view_window_start = view_window_start;
         });
         
-        // Repaint every second
+        // Repaint every second for live updates
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
 }
