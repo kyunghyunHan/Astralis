@@ -49,6 +49,7 @@ struct CryptoApp {
     view_window_start: f64,
     window_size: f64,
     is_dragging: bool,
+    is_live_mode: bool,  // 👈 라이브 모드 추적
 }
 
 impl Default for CryptoApp {
@@ -66,6 +67,7 @@ impl Default for CryptoApp {
             view_window_start: 0.0,
             window_size: 500.0 * 60.0,
             is_dragging: false,
+            is_live_mode: true,  // 👈 초기에는 라이브 모드
         };
         
         // Start fetching data
@@ -83,24 +85,33 @@ async fn fetch_binance_data(
     candle_data: Arc<Mutex<VecDeque<CandleData>>>,
 ) {
     loop {
-        match fetch_klines().await {
+        // 현재 데이터 범위 확인
+        let (_current_start, _current_end) = if let Ok(data) = candle_data.lock() {
+            if let (Some(first), Some(last)) = (data.front(), data.back()) {
+                (first.timestamp, last.timestamp)
+            } else {
+                (0.0, 0.0)
+            }
+        } else {
+            (0.0, 0.0)
+        };
+        
+        // 최신 500개 데이터만 업데이트 (실시간 업데이트용)
+        match fetch_klines_latest().await {
             Ok(candles) => {
-                // 스마트 업데이트: 기존 데이터 보존하면서 새 데이터만 추가/업데이트
                 if let Ok(mut data) = candle_data.lock() {
                     if data.is_empty() {
                         // 처음 로딩일 때만 전체 데이터 추가
                         data.extend(candles.iter().cloned());
                     } else {
-                        // 기존 데이터가 있으면 새로운/업데이트된 데이터만 처리
+                        // 기존 데이터가 있으면 최신 부분만 업데이트
                         let latest_existing_time = data.back().map(|d| d.timestamp).unwrap_or(0.0);
                         
                         for new_candle in &candles {
-                            // 기존 데이터보다 새로운 시간의 캔들만 추가
                             if new_candle.timestamp > latest_existing_time {
                                 data.push_back(new_candle.clone());
                             } else if let Some(existing_pos) = data.iter().position(|existing| 
                                 (existing.timestamp - new_candle.timestamp).abs() < 1.0) {
-                                // 같은 시간의 캔들이면 업데이트 (실시간 데이터가 더 정확할 수 있음)
                                 data[existing_pos] = new_candle.clone();
                             }
                         }
@@ -127,7 +138,7 @@ async fn fetch_binance_data(
     }
 }
 
-async fn fetch_klines() -> Result<Vec<CandleData>, Box<dyn std::error::Error>> {
+async fn fetch_klines_latest() -> Result<Vec<CandleData>, Box<dyn std::error::Error>> {
     let url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=500";
     
     let client = reqwest::Client::new();
@@ -241,18 +252,11 @@ impl eframe::App for CryptoApp {
                             
                             if self.view_window_start == 0.0 {
                                 self.view_window_start = self.latest_timestamp - self.window_size;
-                            } else {
-                                // 새 데이터가 추가되면 윈도우를 함께 이동 (라이브 모드 유지)
-                                let time_diff = self.latest_timestamp - old_latest;
-                                if time_diff > 0.0 {
-                                    // 현재 윈도우가 최신 데이터 근처에 있다면 함께 이동
-                                    let window_end = self.view_window_start + self.window_size;
-                                    let is_near_live = (old_latest - window_end).abs() < 300.0; // 5분 이내
-                                    
-                                    if is_near_live {
-                                        self.view_window_start += time_diff;
-                                    }
-                                }
+                                self.is_live_mode = true;
+                            } else if self.is_live_mode {
+                                // 라이브 모드일 때: 최신 데이터가 윈도우 오른쪽 끝에서 약간 안쪽에 오도록
+                                let buffer = 60.0 * 5.0; // 5분 버퍼
+                                self.view_window_start = self.latest_timestamp + buffer - self.window_size;
                             }
                         }
                     }
@@ -283,7 +287,10 @@ impl eframe::App for CryptoApp {
                 ui.separator();
                 
                 if ui.button("Live").clicked() {
-                    self.view_window_start = self.latest_timestamp - self.window_size;
+                    // 라이브 모드로 전환 - 최신 데이터가 오른쪽에서 여유있게 보이도록
+                    let buffer = 60.0 * 5.0; // 5분 버퍼
+                    self.view_window_start = self.latest_timestamp + buffer - self.window_size;
+                    self.is_live_mode = true;
                 }
                 
                 ui.separator();
@@ -291,7 +298,26 @@ impl eframe::App for CryptoApp {
                 if self.is_loading {
                     ui.colored_label(egui::Color32::YELLOW, "Loading...");
                 } else {
-                    ui.colored_label(egui::Color32::GREEN, "Live");
+                    if self.is_live_mode {
+                        ui.colored_label(egui::Color32::GREEN, "🔴 LIVE");
+                    } else {
+                        ui.colored_label(egui::Color32::LIGHT_BLUE, "📜 History");
+                    }
+                    ui.separator();
+                    // 더 자세한 디버그 정보
+                    let window_end = self.view_window_start + self.window_size;
+                    let is_at_edge = (window_end - self.latest_timestamp).abs() < 60.0; // 1분 이내
+                    ui.label(format!("Window: {} ~ {}", 
+                        chrono::DateTime::from_timestamp(self.view_window_start as i64, 0)
+                            .map(|dt| dt.format("%H:%M").to_string())
+                            .unwrap_or("--:--".to_string()),
+                        chrono::DateTime::from_timestamp(window_end as i64, 0)
+                            .map(|dt| dt.format("%H:%M").to_string())
+                            .unwrap_or("--:--".to_string())
+                    ));
+                    ui.label(format!("At edge: {}", if is_at_edge { "✅ Yes" } else { "❌ No" }));
+                    let data_count = if let Ok(data) = self.candle_data.lock() { data.len() } else { 0 };
+                    ui.label(format!("Data: {} candles", data_count));
                 }
             });
         });
@@ -325,33 +351,47 @@ impl eframe::App for CryptoApp {
                 .view_aspect(2.0)
                 .allow_zoom([false, false])
                 .allow_drag([true, false])
-                .allow_scroll(false);
+                .allow_scroll(false)
+                .auto_bounds(egui::Vec2b::new(false, true))  // X축 자동 바운드 비활성화, Y축 활성화
+                .default_x_bounds(view_window_start, view_window_start + window_size);
             
             let plot_response = plot.show(ui, |plot_ui| {
-                // Handle dragging
+                // 일반적인 드래그 처리 - bounds가 알아서 제한함
                 if plot_ui.response().dragged() {
                     let drag_delta = plot_ui.pointer_coordinate_drag_delta();
                     if drag_delta.x.abs() > 0.1 {
-                        view_window_start -= drag_delta.x as f64;
+                        let proposed_start = view_window_start - drag_delta.x as f64;
+                        let proposed_end = proposed_start + window_size;
                         
-                        // Don't go into future
-                        let max_start = latest_timestamp - window_size;
-                        if view_window_start > max_start {
-                            view_window_start = max_start;
+                        // 범위 제한
+                        if proposed_end <= latest_timestamp && proposed_start >= 0.0 {
+                            view_window_start = proposed_start;
+                            self.is_live_mode = false;
+                        } else if proposed_end > latest_timestamp {
+                            view_window_start = latest_timestamp - window_size;
+                            self.is_live_mode = true;
+                        } else if proposed_start < 0.0 {
+                            view_window_start = 0.0;
+                            self.is_live_mode = false;
                         }
                     }
                 }
                 
-                // Filter data for current window
+                // Filter data for current window - 여유분 추가
                 let window_end = view_window_start + window_size;
                 let filtered_data: Vec<_> = data
                     .iter()
                     .filter(|candle| {
-                        candle.timestamp >= view_window_start && 
-                        candle.timestamp <= window_end
+                        // 윈도우보다 약간 더 넓은 범위로 필터링 (여유분 10%)
+                        let margin = window_size * 0.1;
+                        candle.timestamp >= (view_window_start - margin) && 
+                        candle.timestamp <= (window_end + margin)
                     })
                     .cloned()
                     .collect();
+                
+                println!("🔍 Window: {:.2} ~ {:.2}, Filtered: {} candles", 
+                    view_window_start, window_end, filtered_data.len());
                 
                 match chart_type {
                     ChartType::Line => {
@@ -403,24 +443,26 @@ impl eframe::App for CryptoApp {
             // Update dragging state
             self.is_dragging = plot_response.response.dragged();
             
-            // 드래그가 끝났을 때 새로운 범위의 데이터 가져오기
+            // 드래그가 끝났을 때 현재 차트 범위의 데이터 가져오기
             if plot_response.response.drag_stopped() {
-                let bounds = plot_response.transform.bounds();
-                let left_x = bounds.min()[0];
-                let right_x = bounds.max()[0];
+                let window_end = self.view_window_start + self.window_size;
+                let margin = self.window_size * 0.1; // 10% 여유분
+                let fetch_start = self.view_window_start - margin;
+                let fetch_end = window_end + margin;
                 
-                println!("🎯 드래그 완료! 차트 범위 - 왼쪽: {:.2}, 오른쪽: {:.2}", left_x, right_x);
+                println!("🎯 차트 범위 변경! 데이터 요청: {:.2} ~ {:.2}", fetch_start, fetch_end);
                 
                 if let Some(rt) = &self.runtime {
                     let candle_data_clone = self.candle_data.clone();
                     
                     rt.spawn(async move {
-                        match fetch_klines_for_range(left_x, right_x).await {
+                        match fetch_klines_for_range(fetch_start, fetch_end).await {
                             Ok(new_candles) => {
                                 if let Ok(mut data) = candle_data_clone.lock() {
-                                    // 기존 데이터에 새 데이터 병합 (중복 제거)
+                                    // 중복 제거하면서 병합
                                     for new_candle in new_candles {
-                                        if !data.iter().any(|existing| (existing.timestamp - new_candle.timestamp).abs() < 1.0) {
+                                        if !data.iter().any(|existing| 
+                                            (existing.timestamp - new_candle.timestamp).abs() < 1.0) {
                                             data.push_back(new_candle);
                                         }
                                     }
@@ -430,10 +472,10 @@ impl eframe::App for CryptoApp {
                                     sorted_data.sort_by(|a, b| a.timestamp.partial_cmp(&b.timestamp).unwrap());
                                     data.extend(sorted_data);
                                 }
-                                println!("✅ 범위 데이터 업데이트 완료!");
+                                println!("✅ 차트 범위 데이터 업데이트 완료!");
                             }
                             Err(e) => {
-                                println!("❌ 범위 데이터 가져오기 실패: {}", e);
+                                println!("❌ 차트 범위 데이터 가져오기 실패: {}", e);
                             }
                         }
                     });
