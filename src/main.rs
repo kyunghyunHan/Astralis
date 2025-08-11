@@ -257,7 +257,7 @@ async fn fetch_binance_data(
         }
         
         let update_interval = match timeframe {
-            Timeframe::M1 | Timeframe::M3 | Timeframe::M5 => 5,
+            Timeframe::M1 | Timeframe::M3 | Timeframe::M5 => 3,
             Timeframe::M15 | Timeframe::M30 => 30,
             Timeframe::H1 | Timeframe::H4 => 60,
             _ => 300,
